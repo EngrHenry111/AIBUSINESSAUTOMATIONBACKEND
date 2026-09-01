@@ -18,8 +18,8 @@ function getGroqClient() {
 
 const MODELS = {
   FAST: 'llama-3.1-8b-instant',
-  SMART: 'llama-3.3-70b-versatile',
-  REASONING: 'deepseek-r1-distill-llama-70b',
+  SMART: 'llama-3.1-8b-instant',
+  REASONING: 'llama-3.1-8b-instant',
 };
 
 module.exports = { getGroqClient, MODELS };
