@@ -128,6 +128,8 @@ app.use(`${API}/admin`, adminRoutes);
 // app.use('/api/v1/whatsapp', whatsappRoutes);
 app.use(`${API}/payments`, paymentRoutes);
 app.use(`${API}/messages`, messageRoutes);
+app.use(`${API}/search`, searchRoutes);
+app.use(`${API}/notifications`, notificationRoutes);
 
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
