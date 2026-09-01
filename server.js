@@ -30,6 +30,9 @@ async function bootstrap() {
     app.set('io', io);
 
     // ── Daily subscription expiry checker ─────────────────────────────────
+    const { startKeepAlive } = require('./src/utils/keepAlive');
+    startKeepAlive();
+
     const { checkSubscriptions } = require('./src/utils/subscriptionChecker');
 
     // Run immediately on startup
