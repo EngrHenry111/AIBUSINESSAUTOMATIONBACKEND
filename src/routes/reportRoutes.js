@@ -1,0 +1,11 @@
+'use strict';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const { aiLimiter } = require('../middleware/rateLimitMiddleware');
+const ctrl = require('../controllers/reportController');
+const router = express.Router();
+router.use(protect, enforceTenant);
+router.get('/types', ctrl.getReportTypes);
+router.post('/generate', aiLimiter, ctrl.generateReport);
+module.exports = router;

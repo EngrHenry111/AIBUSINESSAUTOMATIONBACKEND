@@ -1,0 +1,18 @@
+'use strict';
+const express = require('express');
+const { body } = require('express-validator');
+const { validate } = require('../middleware/validateMiddleware');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const { isManager } = require('../middleware/roleMiddleware');
+const ctrl = require('../controllers/userController');
+const router = express.Router();
+router.use(protect, enforceTenant);
+router.get('/profile', ctrl.getProfile);
+router.patch('/profile', ctrl.updateProfile);
+router.patch('/change-password', [body('currentPassword').notEmpty(), body('newPassword').isLength({ min: 8 })], validate, ctrl.changePassword);
+router.get('/team', ctrl.getTeamMembers);
+router.post('/team/invite', isManager, [body('email').isEmail(), body('name').trim().notEmpty()], validate, ctrl.inviteMember);
+router.patch('/team/:id/role', isManager, ctrl.updateMemberRole);
+router.delete('/team/:id', isManager, ctrl.removeMember);
+module.exports = router;

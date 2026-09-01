@@ -1,0 +1,10 @@
+node_modules
+.env
+.env.*
+uploads/temp/*
+*.log
+.git
+.gitignore
+README.md
+*.test.js
+coverage/

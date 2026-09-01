@@ -1,0 +1,13 @@
+'use strict';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const { isManager } = require('../middleware/roleMiddleware');
+const ctrl = require('../controllers/companyController');
+const router = express.Router();
+router.use(protect, enforceTenant);
+router.get('/', ctrl.getCompany);
+router.patch('/', isManager, ctrl.updateCompany);
+router.get('/usage', ctrl.getUsage);
+router.patch('/ai-settings', isManager, ctrl.updateAISettings);
+module.exports = router;

@@ -1,0 +1,13 @@
+'use strict';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const { aiLimiter } = require('../middleware/rateLimitMiddleware');
+const ctrl = require('../controllers/socialController');
+const router = express.Router();
+router.use(protect, enforceTenant, aiLimiter);
+router.post('/content-plan', ctrl.generateContentPlan);
+router.post('/caption', ctrl.generateCaption);
+router.post('/hashtags', ctrl.generateHashtags);
+router.post('/campaign-ideas', ctrl.generateCampaignIdeas);
+module.exports = router;

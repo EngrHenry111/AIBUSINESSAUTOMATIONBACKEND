@@ -1,0 +1,13 @@
+'use strict';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const ctrl = require('../controllers/knowledgeBaseController');
+const router = express.Router();
+router.use(protect, enforceTenant);
+router.get('/', ctrl.getKnowledgeBases);
+router.post('/', ctrl.createKnowledgeBase);
+router.get('/:id', ctrl.getKnowledgeBase);
+router.put('/:id', ctrl.updateKnowledgeBase);
+router.delete('/:id', ctrl.deleteKnowledgeBase);
+module.exports = router;

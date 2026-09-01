@@ -1,0 +1,14 @@
+'use strict';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware');
+const { enforceTenant } = require('../middleware/tenantMiddleware');
+const ctrl = require('../controllers/orderController');
+const router = express.Router();
+router.use(protect, enforceTenant);
+router.get('/', ctrl.getOrders);
+router.post('/', ctrl.createOrder);
+router.get('/:id', ctrl.getOrder);
+router.put('/:id', ctrl.updateOrder);
+router.delete('/:id', ctrl.deleteOrder);
+router.get('/track/:orderNumber', ctrl.getOrderStatus);
+module.exports = router;
