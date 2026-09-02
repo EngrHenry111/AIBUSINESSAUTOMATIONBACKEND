@@ -16,10 +16,12 @@ function getGroqClient() {
   return groqClient;
 }
 
+const DEFAULT_MODEL = process.env.GROQ_MODEL || 'mixtral-8x7b-32768';
+
 const MODELS = {
-  FAST: 'llama-3.1-8b-instant',
-  SMART: 'llama-3.1-8b-instant',
-  REASONING: 'llama-3.1-8b-instant',
+  FAST: DEFAULT_MODEL,
+  SMART: DEFAULT_MODEL,
+  REASONING: DEFAULT_MODEL,
 };
 
 module.exports = { getGroqClient, MODELS };
