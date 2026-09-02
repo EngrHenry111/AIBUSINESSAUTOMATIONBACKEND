@@ -120,7 +120,7 @@ exports.askQuestion = async (req, res, next) => {
 
     const topScore = reranked[0]?.rerankScore || 0;
 
-    if (!reranked.length || topScore < confidenceThreshold) {
+    if (!reranked.length || topScore < 0.05) {
       const notFoundMsg = "I couldn't find sufficient information in your knowledge base to answer that question.";
       chat.messages.push({ role: 'assistant', content: notFoundMsg, confidence: 0, sources: [] });
       chat.lastMessageAt = new Date();
