@@ -53,18 +53,11 @@ try {
     ctrl.googleCallback
   );
 
-  const logger = require('../utils/logger');
-  logger.info('✅ Google OAuth routes registered');
-
 } catch (err) {
   const logger = require('../utils/logger');
-  logger.warn(`⚠️ Google OAuth not available: ${err.message}`);
-
+  logger.warn(`Google OAuth not available: ${err.message}`);
   router.get('/google', (req, res) => {
-    res.status(503).json({
-      success: false,
-      message: 'Google OAuth not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
-    });
+    res.status(503).json({ success: false, message: 'Google OAuth not configured.' });
   });
 }
 
