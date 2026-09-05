@@ -8,9 +8,12 @@ const compression = require('compression');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const cookieParser = require('cookie-parser');
+const passport = require('passport');
 const path = require('path');
 
-const { generalLimiter, authLimiter, uploadLimiter } = require('./middleware/rateLimitMiddleware');
+require('./config/passport');
+
+const { generalLimiter, uploadLimiter } = require('./middleware/rateLimitMiddleware');
 const errorMiddleware = require('./middleware/errorMiddleware');
 const logger = require('./utils/logger');
 
@@ -40,6 +43,11 @@ const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 
+// ─── Proxy Trust ─────────────────────────────────────────────────────────────
+// Render / Vercel / any host that terminates TLS in front of us. Required for
+// secure cookies, correct req.ip (rate limiting), and req.protocol.
+app.set('trust proxy', 1);
+
 // ─── Security Headers ────────────────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
@@ -54,27 +62,49 @@ app.use(helmet({
 }));
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+// Explicit allow-list from CLIENT_URL (comma-separated), normalised without a
+// trailing slash, plus pattern matches for localhost, any bislyai.com host, and
+// Vercel preview deployments.
+const staticOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
   .split(',')
-  .map(o => o.trim());
+  .map(o => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 
-app.use(cors({
+const originPatterns = [
+  /^https?:\/\/localhost(:\d+)?$/,
+  /^https:\/\/([a-z0-9-]+\.)*bislyai\.com$/,
+  /^https:\/\/[a-z0-9-]+\.vercel\.app$/,
+];
+
+const isAllowedOrigin = (origin) => {
+  const clean = origin.replace(/\/+$/, '');
+  return staticOrigins.includes(clean) || originPatterns.some((re) => re.test(clean));
+};
+
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS policy: origin ${origin} not allowed`));
-    }
+    // No Origin header => same-origin or a non-browser client (curl, health checks).
+    if (!origin || isAllowedOrigin(origin)) return callback(null, true);
+    logger.warn(`CORS blocked origin: ${origin}`);
+    // Return false (not an Error) so the response is a clean request without
+    // CORS headers instead of a 500 from the error handler.
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Refresh-Token'],
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // ensure preflight is answered for every route
 
 // ─── Body Parsing ─────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
+
+// ─── Passport (stateless — no sessions) ──────────────────────────────────────
+app.use(passport.initialize());
 
 // ─── Compression ─────────────────────────────────────────────────────────────
 app.use(compression());
@@ -93,8 +123,9 @@ if (process.env.NODE_ENV !== 'test') {
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 app.use('/api', generalLimiter);
-app.use('/api/auth', authLimiter);
-app.use('/api/documents/upload', uploadLimiter);
+app.use('/api/v1/documents/upload', uploadLimiter);
+// authLimiter is applied per-route inside authRoutes (login / register / password
+// reset only) so that /auth/me and /auth/refresh-token stay unthrottled.
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {

@@ -1,17 +1,18 @@
 'use strict';
 
+const crypto = require('crypto');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
 const Company = require('../models/Company');
 const logger = require('../utils/logger');
 
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: `${process.env.API_URL || 'https://businessai-backend-6g8l.onrender.com'}/api/v1/auth/google/callback`,
-},
-async (accessToken, refreshToken, profile, done) => {
+// Only wire up Google OAuth when credentials are present. Without this guard a
+// missing GOOGLE_CLIENT_ID makes `new GoogleStrategy()` throw at require time,
+// which crashes the whole server on boot (every route then 404s / 502s).
+const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+async function verifyGoogleProfile(accessToken, refreshToken, profile, done) {
   try {
     const email = profile.emails?.[0]?.value;
     const name = profile.displayName;
@@ -56,21 +57,33 @@ async (accessToken, refreshToken, profile, done) => {
 
     logger.info(`New user via Google OAuth: ${email}`);
     done(null, user);
-
   } catch (err) {
     logger.error('Google OAuth error:', err);
     done(err, null);
   }
-}));
+}
 
-passport.serializeUser((user, done) => done(null, user._id));
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (err) {
-    done(err, null);
-  }
-});
+if (googleEnabled) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: `${(process.env.API_URL || 'https://businessai-backend-6g8l.onrender.com').replace(/\/+$/, '')}/api/v1/auth/google/callback`,
+  }, verifyGoogleProfile));
+
+  passport.serializeUser((user, done) => done(null, user._id));
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const user = await User.findById(id);
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  });
+
+  logger.info('Google OAuth strategy registered');
+} else {
+  logger.warn('Google OAuth disabled — set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable it');
+}
 
 module.exports = passport;
+module.exports.googleEnabled = googleEnabled;

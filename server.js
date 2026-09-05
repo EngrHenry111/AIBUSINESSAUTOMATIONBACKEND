@@ -20,7 +20,9 @@ async function bootstrap() {
 
     const io = new SocketIOServer(httpServer, {
       cors: {
-        origin: (process.env.CLIENT_URL || 'http://localhost:5173').split(','),
+        origin: (process.env.CLIENT_URL || 'http://localhost:5173')
+          .split(',')
+          .map((o) => o.trim().replace(/\/+$/, '')),
         methods: ['GET', 'POST'],
         credentials: true,
       },

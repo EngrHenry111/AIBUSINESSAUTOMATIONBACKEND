@@ -21,16 +21,16 @@ const generateResetToken = () => {
 
 const setTokenCookies = (res, accessToken, refreshToken) => {
   const isProd = process.env.NODE_ENV === 'production';
+  // Frontend (bislyai.com) and API (onrender.com) are different sites, so cookies
+  // must be SameSite=None; Secure to be sent on cross-site requests. In dev
+  // (same-origin via the Vite proxy) Lax is fine and works without HTTPS.
+  const crossSite = { httpOnly: true, secure: isProd, sameSite: isProd ? 'none' : 'lax' };
   res.cookie('accessToken', accessToken, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'strict' : 'lax',
+    ...crossSite,
     maxAge: 15 * 60 * 1000,
   });
   res.cookie('refreshToken', refreshToken, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'strict' : 'lax',
+    ...crossSite,
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/api/v1/auth/refresh-token',
   });
