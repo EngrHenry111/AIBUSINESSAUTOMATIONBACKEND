@@ -7,23 +7,20 @@ let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
-    const port = Number(process.env.EMAIL_PORT) || 587;
     transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port,
-      secure: port === 465, // true for 465, false for 587
+      host: 'smtp.resend.com',
+      port: 587,
+      secure: false,
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: 'resend',
+        pass: process.env.RESEND_API_KEY || process.env.EMAIL_PASS,
       },
-      // Resend.com compatibility
-      tls: { rejectUnauthorized: false },
     });
   }
   return transporter;
 }
 
-const FROM = process.env.EMAIL_FROM || 'EngrHenryTech BusinessAI <noreply@engrhenrytech.com>';
+const FROM = process.env.EMAIL_FROM || 'BizlyAI <onboarding@resend.dev>';
 const BASE_URL = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5174';
 
 // ── Base HTML wrapper ─────────────────────────────────────────────────────
@@ -216,8 +213,8 @@ async function sendBroadcast(email, name, subject, body) {
 
 // ── Core send function ─────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    logger.warn(`Email not configured. Would send to ${to}: ${subject}`);
+  if (!process.env.RESEND_API_KEY && !process.env.EMAIL_PASS) {
+    logger.warn(`Email not configured (set RESEND_API_KEY). Would send to ${to}: ${subject}`);
     return { messageId: 'not-configured', preview: `Email to ${to}: ${subject}` };
   }
 
