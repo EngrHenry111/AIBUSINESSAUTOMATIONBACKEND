@@ -31,6 +31,9 @@ async function bootstrap() {
 
     app.set('io', io);
 
+    // Let the WhatsApp service emit real-time events (QR, handovers, messages)
+    require('./src/services/whatsappService').setIo(io);
+
     // ── Daily subscription expiry checker ─────────────────────────────────
     const { startKeepAlive } = require('./src/utils/keepAlive');
     startKeepAlive();
@@ -62,6 +65,18 @@ async function bootstrap() {
       // Join AI chat room
       socket.on('join_chat', (chatId) => {
         socket.join(`chat:${chatId}`);
+      });
+
+      // ── WhatsApp ──────────────────────────────────────────────────────
+      // Team members join their company room to receive:
+      //   whatsapp:qr                  — QR code ready to scan
+      //   whatsapp:status              — client connected / disconnected / error
+      //   whatsapp:handover_needed     — AI escalated a conversation to humans
+      //   whatsapp:new_message         — a new message on any conversation
+      //   whatsapp:conversation_claimed— a teammate took a conversation
+      //   whatsapp:conversation_updated— status changed (resolved / back to AI)
+      socket.on('whatsapp:join', (companyId) => {
+        if (companyId) socket.join(`company:${companyId}`);
       });
 
       // Typing indicators

@@ -121,6 +121,27 @@ async function generateAnswer(context, question, conversationHistory = []) {
 }
 
 /**
+ * Customer-facing WhatsApp reply — short, warm, plain text, grounded in context.
+ */
+async function generateWhatsAppReply(context, question, history = []) {
+  const systemPrompt = `You are a friendly customer-support assistant replying on WhatsApp for a business.
+Rules:
+1. Answer using ONLY the provided knowledge base context.
+2. If the answer is not in the context, briefly say you'll connect them with a team member — do not guess.
+3. Keep replies short and conversational: 1-3 sentences, WhatsApp style. No markdown, no headings, no bullet characters.
+4. Be warm, human and professional. Never mention "context" or "documents".`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.slice(-6),
+    { role: 'user', content: `KNOWLEDGE BASE:\n${context}\n\n---\nCUSTOMER MESSAGE: ${question}` },
+  ];
+
+  const response = await complete({ messages, model: MODELS.SMART, maxTokens: 400, temperature: 0.3 });
+  return response.choices[0].message.content.trim();
+}
+
+/**
  * Generic agent execution
  */
 async function runAgent(agentType, input, options = {}) {
@@ -174,4 +195,4 @@ async function generateStructured(prompt, schema, agentType = 'knowledge_assista
   }
 }
 
-module.exports = { generateAnswer, runAgent, streamAnswer, generateStructured, MODELS };
+module.exports = { generateAnswer, generateWhatsAppReply, runAgent, streamAnswer, generateStructured, MODELS };

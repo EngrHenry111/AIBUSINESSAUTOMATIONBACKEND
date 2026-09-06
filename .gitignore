@@ -8,4 +8,8 @@ dist/
 __pycache__/
 *.pyc
 .env.local
-EOF
+
+# WhatsApp (whatsapp-web.js) local sessions — contain auth tokens, never commit
+whatsapp-sessions/
+.wwebjs_auth/
+.wwebjs_cache/
