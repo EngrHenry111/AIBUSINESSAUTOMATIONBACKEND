@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const User = require('../models/User');
 const Company = require('../models/Company');
+const Payment = require('../models/Payment');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const logger = require('../utils/logger');
@@ -262,6 +263,26 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount) {
     'limits.maxDocuments': planConfig.features.maxDocuments,
     'limits.maxQuestionsPerMonth': planConfig.features.maxQuestionsPerMonth,
   });
+
+  // Record the transaction for revenue reporting. Keyed on reference so the
+  // verify call and the webhook for the same charge don't create duplicates.
+  try {
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        companyId,
+        plan,
+        billingCycle,
+        amount,
+        currency: planConfig.currency || 'NGN',
+        status: 'success',
+        paidAt: now,
+      },
+      { upsert: true, setDefaultsOnInsert: true, new: true }
+    );
+  } catch (err) {
+    logger.error(`Failed to record payment ${reference}: ${err.message}`);
+  }
 
   logger.info(`✅ Plan upgraded: company ${companyId} → ${plan} (${billingCycle})`);
 }

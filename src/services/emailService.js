@@ -200,6 +200,20 @@ async function sendAppointmentConfirmation(email, customerName, title, dateTime,
   return send({ to: email, subject: `Appointment Confirmed: ${title}`, html });
 }
 
+async function sendBroadcast(email, name, subject, body) {
+  const html = baseTemplate(subject, `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">${subject}</h2>
+    <p style="color:#475569;margin:0 0 24px;">Hi ${name || 'there'},</p>
+    <div style="color:#475569;line-height:1.8;white-space:pre-line;">${body}</div>
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
+    <p style="color:#94a3b8;font-size:12px;">
+      You're receiving this because you own a workspace on EngrHenryTech BusinessAI.
+    </p>
+  `);
+
+  return send({ to: email, subject, html });
+}
+
 // ── Core send function ─────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -223,5 +237,6 @@ module.exports = {
   sendWelcome,
   sendInvoiceReminder,
   sendAppointmentConfirmation,
+  sendBroadcast,
   send,
 };

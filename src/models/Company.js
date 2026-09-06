@@ -10,7 +10,7 @@ const companySchema = new mongoose.Schema({
   logo: { type: String },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   subscription: {
-    plan: { type: String, enum: ['trial', 'starter', 'professional', 'enterprise'], default: 'trial' },
+    plan: { type: String, enum: ['trial', 'starter', 'professional', 'business', 'enterprise'], default: 'trial' },
     status: { type: String, enum: ['active', 'inactive', 'past_due', 'cancelled', 'expired'], default: 'active' },
     currentPeriodStart: Date,
     currentPeriodEnd: Date,
