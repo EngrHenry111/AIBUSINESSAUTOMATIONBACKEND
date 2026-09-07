@@ -211,6 +211,27 @@ async function sendBroadcast(email, name, subject, body) {
   return send({ to: email, subject, html });
 }
 
+async function sendPortalLink(email, companyName, link) {
+  const html = baseTemplate('Your Documents', `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Access Your Documents</h2>
+    <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
+      ${companyName || 'Your provider'} has shared your invoices, orders and appointments with you.
+      Click below to view them — the link works for <strong>24 hours</strong>.
+    </p>
+    <div style="text-align:center;margin:32px 0;">
+      <a href="${link}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        View My Documents
+      </a>
+    </div>
+    <p style="color:#94a3b8;font-size:13px;margin:0;">
+      If you didn't request this, you can ignore this email.<br/>
+      Or paste this link: <a href="${link}" style="color:#6366f1;">${link}</a>
+    </p>
+  `);
+
+  return send({ to: email, subject: `Access your documents from ${companyName || 'your provider'}`, html });
+}
+
 // ── Core send function ─────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   if (!process.env.RESEND_API_KEY && !process.env.EMAIL_PASS) {
@@ -235,5 +256,6 @@ module.exports = {
   sendInvoiceReminder,
   sendAppointmentConfirmation,
   sendBroadcast,
+  sendPortalLink,
   send,
 };
