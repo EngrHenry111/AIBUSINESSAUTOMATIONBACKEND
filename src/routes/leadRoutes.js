@@ -10,10 +10,13 @@ router.use(protect, enforceTenant);
 
 router.get('/', ctrl.getLeads);
 router.post('/', ctrl.createLead);
-router.get('/:id', ctrl.getLead);
+router.post('/import', ctrl.bulkImport);
+router.post('/bulk-analyze', aiLimiter, ctrl.bulkAnalyzeLeads);
+
+router.get('/:id', ctrl.getLeadDetail);
 router.put('/:id', ctrl.updateLead);
 router.delete('/:id', ctrl.deleteLead);
+router.post('/:id/notes', ctrl.addNote);
 router.post('/:id/analyze', aiLimiter, ctrl.analyzeLead);
-router.post('/bulk-analyze', aiLimiter, ctrl.bulkAnalyzeLeads);
 
 module.exports = router;

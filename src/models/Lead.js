@@ -20,7 +20,13 @@ const leadSchema = new mongoose.Schema({
   currency: { type: String, default: 'USD' },
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   tags: [String],
-  notes: { type: String, maxlength: 2000 },
+  // Free-text description (was `notes` — renamed so `notes` can be a thread)
+  description: { type: String, maxlength: 4000 },
+  notes: [{
+    content: { type: String, required: true, maxlength: 4000 },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdAt: { type: Date, default: Date.now },
+  }],
   lastContactedAt: { type: Date },
   nextFollowUpAt: { type: Date },
   ai: {
