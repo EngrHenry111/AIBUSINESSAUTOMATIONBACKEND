@@ -100,7 +100,13 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); // ensure preflight is answered for every route
 
 // ─── Body Parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '10mb' }));
+// The Paystack webhook needs its raw body for signature verification, so skip
+// the JSON parser for that one route (it uses express.raw in its router).
+const jsonParser = express.json({ limit: '10mb' });
+app.use((req, res, next) => {
+  if (req.originalUrl.startsWith('/api/v1/payments/webhook')) return next();
+  return jsonParser(req, res, next);
+});
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 

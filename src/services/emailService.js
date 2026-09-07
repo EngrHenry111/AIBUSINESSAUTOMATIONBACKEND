@@ -232,6 +232,41 @@ async function sendPortalLink(email, companyName, link) {
   return send({ to: email, subject: `Access your documents from ${companyName || 'your provider'}`, html });
 }
 
+async function sendSubscriptionWarning(email, name, planName, endDate) {
+  const html = baseTemplate('Subscription Won\'t Renew', `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Your subscription won't renew</h2>
+    <p style="color:#475569;margin:0 0 20px;">Hi ${name || 'there'},</p>
+    <p style="color:#475569;line-height:1.7;margin:0 0 20px;">
+      Your <strong>${planName}</strong> subscription is set to <strong>not renew</strong> and will end on
+      <strong>${endDate}</strong>. This usually means a card issue or a cancellation.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${BASE_URL}/billing" style="background:#6366f1;color:#fff;padding:13px 30px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        Keep My Subscription
+      </a>
+    </div>
+    <p style="color:#94a3b8;font-size:13px;margin:0;">Update your card or re-subscribe from the billing page to avoid losing access.</p>
+  `);
+  return send({ to: email, subject: `Action needed: your ${planName} subscription won't renew`, html });
+}
+
+async function sendPaymentFailed(email, name, planName, amount) {
+  const html = baseTemplate('Payment Failed', `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">We couldn't process your payment</h2>
+    <p style="color:#475569;margin:0 0 20px;">Hi ${name || 'there'},</p>
+    <p style="color:#475569;line-height:1.7;margin:0 0 20px;">
+      A recurring charge of <strong>${amount}</strong> for your <strong>${planName}</strong> plan failed.
+      Paystack will retry automatically, but please check your card to avoid an interruption.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${BASE_URL}/billing" style="background:#6366f1;color:#fff;padding:13px 30px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        Update Payment Method
+      </a>
+    </div>
+  `);
+  return send({ to: email, subject: `Payment failed for your ${planName} plan`, html });
+}
+
 // ── Core send function ─────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   if (!process.env.RESEND_API_KEY && !process.env.EMAIL_PASS) {
@@ -257,6 +292,8 @@ module.exports = {
   sendAppointmentConfirmation,
   sendBroadcast,
   sendPortalLink,
+  sendSubscriptionWarning,
+  sendPaymentFailed,
   baseTemplate,
   send,
 };
