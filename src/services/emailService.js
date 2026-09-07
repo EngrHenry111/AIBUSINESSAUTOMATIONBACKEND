@@ -257,5 +257,6 @@ module.exports = {
   sendAppointmentConfirmation,
   sendBroadcast,
   sendPortalLink,
+  baseTemplate,
   send,
 };

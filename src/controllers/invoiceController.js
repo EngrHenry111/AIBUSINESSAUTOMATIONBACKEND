@@ -1,8 +1,18 @@
 'use strict';
 
 const Invoice = require('../models/Invoice');
+const Company = require('../models/Company');
 const { generateStructured, runAgent } = require('../services/groqService');
+const emailService = require('../services/emailService');
 const { AppError } = require('../middleware/errorMiddleware');
+const logger = require('../utils/logger');
+
+const clientUrl = () =>
+  (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const money = (n, cur) => `${cur || 'USD'} ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const day = (d) => (d ? new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—');
 
 exports.getInvoices = async (req, res, next) => {
   try {
@@ -222,4 +232,150 @@ ${invoice.notes ? `<div class="notes"><strong>Notes:</strong> ${invoice.notes}</
     res.setHeader('Content-Disposition', `inline; filename="invoice-${invoice.invoiceNumber}.html"`);
     res.send(html);
   } catch (err) { next(err); }
+};
+
+// ── Email HTML builders ─────────────────────────────────────────────────
+function invoiceEmailHtml(invoice, company) {
+  const cur = invoice.currency || 'USD';
+  const portalUrl = `${clientUrl()}/portal/login?company=${invoice.companyId}`;
+  const rows = (invoice.items || []).map((it) => `
+    <tr>
+      <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#334155;">${esc(it.description)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#334155;text-align:center;">${esc(it.quantity ?? 1)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#334155;text-align:right;">${money(it.unitPrice, cur)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#334155;text-align:right;">${money(it.total, cur)}</td>
+    </tr>`).join('');
+
+  return `
+    <h2 style="color:#0f172a;margin:0 0 4px;font-size:22px;">Invoice ${esc(invoice.invoiceNumber)}</h2>
+    <p style="color:#64748b;margin:0 0 20px;font-size:14px;">From <strong>${esc(company?.companyName || 'BizlyAI')}</strong></p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
+      <tr>
+        <td style="font-size:13px;color:#475569;">Issue date: <strong>${day(invoice.issuedAt || invoice.createdAt)}</strong></td>
+        <td style="font-size:13px;color:#475569;text-align:right;">Due date: <strong>${day(invoice.dueAt)}</strong></td>
+      </tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:0 0 8px;">
+      <tr style="background:#f8fafc;">
+        <th style="padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Description</th>
+        <th style="padding:10px 12px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Qty</th>
+        <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Unit</th>
+        <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Total</th>
+      </tr>
+      ${rows || '<tr><td colspan="4" style="padding:14px;color:#94a3b8;font-size:13px;">No line items</td></tr>'}
+    </table>
+
+    <table width="260" cellpadding="0" cellspacing="0" align="right" style="margin:0 0 24px;">
+      <tr><td style="padding:6px 0;font-size:14px;color:#475569;">Subtotal</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">${money(invoice.subtotal, cur)}</td></tr>
+      ${invoice.tax ? `<tr><td style="padding:6px 0;font-size:14px;color:#475569;">Tax</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">${money(invoice.tax, cur)}</td></tr>` : ''}
+      ${invoice.discount ? `<tr><td style="padding:6px 0;font-size:14px;color:#475569;">Discount</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">-${money(invoice.discount, cur)}</td></tr>` : ''}
+      <tr><td style="padding:12px 0 0;font-size:17px;font-weight:800;color:#6366f1;border-top:2px solid #6366f1;">TOTAL</td><td style="padding:12px 0 0;font-size:17px;font-weight:800;color:#6366f1;border-top:2px solid #6366f1;text-align:right;">${money(invoice.total, cur)}</td></tr>
+    </table>
+
+    <div style="clear:both;text-align:center;margin:8px 0 24px;">
+      <a href="${portalUrl}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        View Invoice &amp; Pay
+      </a>
+    </div>
+
+    ${invoice.notes ? `<p style="font-size:13px;color:#475569;background:#f8fafc;border-radius:8px;padding:12px;">${esc(invoice.notes)}</p>` : ''}
+
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
+    <p style="color:#94a3b8;font-size:12px;margin:0;">
+      ${esc(company?.companyName || 'BizlyAI')}${company?.website ? ` · <a href="${esc(company.website)}" style="color:#6366f1;">${esc(company.website)}</a>` : ''}<br/>
+      Questions about this invoice? Just reply to this email.
+    </p>`;
+}
+
+function receiptEmailHtml(invoice, company) {
+  const cur = invoice.currency || 'USD';
+  const portalUrl = `${clientUrl()}/portal/login?company=${invoice.companyId}`;
+  return `
+    <div style="text-align:center;margin:0 0 8px;">
+      <div style="width:56px;height:56px;border-radius:50%;background:#dcfce7;color:#16a34a;font-size:30px;line-height:56px;margin:0 auto 12px;">✅</div>
+    </div>
+    <h2 style="color:#0f172a;margin:0 0 6px;font-size:22px;text-align:center;">Payment Received</h2>
+    <p style="color:#64748b;margin:0 0 24px;font-size:14px;text-align:center;">Thank you for your payment to <strong>${esc(company?.companyName || 'BizlyAI')}</strong>.</p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border-radius:10px;padding:4px 0;margin:0 0 24px;">
+      <tr><td style="padding:10px 16px;font-size:13px;color:#475569;">Invoice</td><td style="padding:10px 16px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;">${esc(invoice.invoiceNumber)}</td></tr>
+      <tr><td style="padding:10px 16px;font-size:13px;color:#475569;">Payment date</td><td style="padding:10px 16px;font-size:13px;color:#0f172a;font-weight:600;text-align:right;">${day(invoice.paidAt || new Date())}</td></tr>
+      <tr><td style="padding:10px 16px;font-size:13px;color:#475569;">Amount paid</td><td style="padding:10px 16px;font-size:16px;color:#16a34a;font-weight:800;text-align:right;">${money(invoice.total, cur)}</td></tr>
+    </table>
+
+    <div style="text-align:center;margin:0 0 24px;">
+      <a href="${portalUrl}" style="background:#6366f1;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;display:inline-block;">
+        Download Receipt
+      </a>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
+    <p style="color:#94a3b8;font-size:12px;margin:0;text-align:center;">
+      ${esc(company?.companyName || 'BizlyAI')} · This is your official payment confirmation.
+    </p>`;
+}
+
+// ── POST /invoices/:id/send-email ───────────────────────────────────────
+exports.sendInvoiceEmail = async (req, res, next) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!invoice) return next(new AppError('Invoice not found.', 404));
+    if (!invoice.customer?.email) {
+      return next(new AppError('This invoice has no customer email address.', 400));
+    }
+
+    const company = await Company.findById(req.companyId).select('companyName website');
+    const html = emailService.baseTemplate(`Invoice ${invoice.invoiceNumber}`, invoiceEmailHtml(invoice, company));
+
+    await emailService.send({
+      to: invoice.customer.email,
+      subject: `Invoice ${invoice.invoiceNumber} from ${company?.companyName || 'BizlyAI'}`,
+      html,
+    });
+
+    invoice.sentAt = new Date();
+    if (invoice.status === 'draft') invoice.status = 'sent';
+    invoice.reminders.push({ sentAt: new Date(), method: 'email', aiGenerated: false, messagePreview: 'Invoice sent to customer' });
+    await invoice.save();
+
+    logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`);
+    res.status(200).json({ success: true, message: `Invoice sent to ${invoice.customer.email}`, data: invoice });
+  } catch (err) {
+    logger.error(`sendInvoiceEmail failed: ${err.message}`);
+    next(new AppError('Could not send the invoice email. Check the email service is configured.', 502));
+  }
+};
+
+// ── POST /invoices/:id/send-receipt ─────────────────────────────────────
+exports.sendPaymentReceipt = async (req, res, next) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!invoice) return next(new AppError('Invoice not found.', 404));
+    if (invoice.status !== 'paid') {
+      return next(new AppError('A receipt can only be sent for a paid invoice.', 400));
+    }
+    if (!invoice.customer?.email) {
+      return next(new AppError('This invoice has no customer email address.', 400));
+    }
+
+    const company = await Company.findById(req.companyId).select('companyName website');
+    const html = emailService.baseTemplate('Payment Received', receiptEmailHtml(invoice, company));
+
+    await emailService.send({
+      to: invoice.customer.email,
+      subject: `Payment received — Invoice ${invoice.invoiceNumber}`,
+      html,
+    });
+
+    invoice.receiptSentAt = new Date();
+    await invoice.save();
+
+    logger.info(`Receipt for ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`);
+    res.status(200).json({ success: true, message: `Receipt sent to ${invoice.customer.email}`, data: invoice });
+  } catch (err) {
+    logger.error(`sendPaymentReceipt failed: ${err.message}`);
+    next(new AppError('Could not send the receipt email.', 502));
+  }
 };

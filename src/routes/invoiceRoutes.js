@@ -15,6 +15,8 @@ router.get('/:id', ctrl.getInvoice);
 router.put('/:id', ctrl.updateInvoice);
 router.delete('/:id', ctrl.deleteInvoice);
 router.post('/:id/draft-reminder', aiLimiter, ctrl.draftReminder);
+router.post('/:id/send-email', ctrl.sendInvoiceEmail);
+router.post('/:id/send-receipt', ctrl.sendPaymentReceipt);
 
 router.get('/:id/pdf', protect, enforceTenant, ctrl.generatePDF);
 

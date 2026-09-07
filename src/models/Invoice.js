@@ -30,6 +30,8 @@ const invoiceSchema = new mongoose.Schema({
   issuedAt: { type: Date, default: Date.now },
   dueAt: { type: Date, required: true },
   paidAt: { type: Date },
+  sentAt: { type: Date },
+  receiptSentAt: { type: Date },
   notes: String,
   reminders: [{
     sentAt: Date,
