@@ -1,26 +1,26 @@
 'use strict';
 
-/**
- * Jitsi Meet video rooms for appointments.
- *
- * Free and open source — no API key, no account, no payment. A room is just a
- * URL that comes into being the moment someone opens it, and disappears when
- * everyone leaves. Override the server with JITSI_BASE_URL if you self-host.
- */
+const JITSI_DOMAIN = 'meet.jit.si';
 
-const BASE_URL = (process.env.JITSI_BASE_URL || 'https://meet.jit.si').replace(/\/+$/, '');
-
-const roomName = (appointmentId) => `bizlyai-${appointmentId}`;
-const getRoomUrl = (appointmentId) => `${BASE_URL}/${roomName(appointmentId)}`;
-
-// Kept async + same shape as before so the controller doesn't change.
-async function createRoom(appointmentId) {
-  return { roomName: roomName(appointmentId), roomUrl: getRoomUrl(appointmentId) };
+function getRoomName(appointmentId) {
+  return `BizlyAI-${appointmentId}`;
 }
 
-// Jitsi rooms are ephemeral; there is nothing to delete server-side.
-async function deleteRoom() {
+function getRoomUrl(appointmentId) {
+  return `https://${JITSI_DOMAIN}/${getRoomName(appointmentId)}`;
+}
+
+async function createRoom(appointmentId) {
+  // Jitsi rooms are created automatically when first person joins
+  // No API call needed
+  const roomUrl = getRoomUrl(appointmentId);
+  const roomName = getRoomName(appointmentId);
+  return { roomUrl, roomName };
+}
+
+async function deleteRoom(roomName) {
+  // Jitsi rooms close automatically when everyone leaves
   return true;
 }
 
-module.exports = { createRoom, deleteRoom, getRoomUrl, roomName };
+module.exports = { createRoom, deleteRoom, getRoomUrl, getRoomName };
