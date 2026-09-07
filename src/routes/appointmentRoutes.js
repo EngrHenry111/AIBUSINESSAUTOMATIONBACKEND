@@ -11,4 +11,10 @@ router.get('/upcoming', ctrl.getUpcoming);
 router.get('/:id', ctrl.getAppointment);
 router.put('/:id', ctrl.updateAppointment);
 router.delete('/:id', ctrl.deleteAppointment);
+
+// Video call (Daily.co)
+router.post('/:id/video-call', ctrl.createVideoCall);
+router.get('/:id/video-call', ctrl.getVideoCall);
+router.delete('/:id/video-call', ctrl.endVideoCall);
+
 module.exports = router;

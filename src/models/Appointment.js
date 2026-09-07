@@ -19,6 +19,11 @@ const appointmentSchema = new mongoose.Schema({
   location: String,
   isVirtual: { type: Boolean, default: false },
   meetingLink: String,
+  // Daily.co video call
+  roomUrl: { type: String },
+  roomName: { type: String },
+  videoCallStartedAt: { type: Date },
+  videoCallEndedAt: { type: Date },
   reminderSent: { type: Boolean, default: false },
   notes: String,
   ai: {

@@ -2,7 +2,15 @@
 
 const Appointment = require('../models/Appointment');
 const { runAgent } = require('../services/groqService');
+const videoCall = require('../services/videoCallService');
 const { AppError } = require('../middleware/errorMiddleware');
+
+// Map a video-service error to an AppError the client can read
+function videoError(err) {
+  if (err.statusCode === 503) return new AppError(err.message, 503);
+  if (err.response) return new AppError('The video service is unavailable right now. Please try again.', 502);
+  return err;
+}
 
 exports.getAppointments = async (req, res, next) => {
   try {
@@ -64,6 +72,58 @@ exports.deleteAppointment = async (req, res, next) => {
     const appt = await Appointment.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
     if (!appt) return next(new AppError('Appointment not found.', 404));
     res.status(200).json({ success: true, message: 'Appointment deleted.' });
+  } catch (err) { next(err); }
+};
+
+// ── Video calls (Daily.co) ────────────────────────────────────────────────
+async function attachRoom(appt) {
+  const { roomUrl, roomName } = await videoCall.createRoom(appt._id.toString());
+  appt.roomUrl = roomUrl;
+  appt.roomName = roomName;
+  appt.isVirtual = true;
+  appt.meetingLink = roomUrl;
+  appt.videoCallEndedAt = undefined;
+  if (!appt.videoCallStartedAt) appt.videoCallStartedAt = new Date();
+  await appt.save();
+  return { roomUrl, roomName };
+}
+
+exports.createVideoCall = async (req, res, next) => {
+  try {
+    const appt = await Appointment.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!appt) return next(new AppError('Appointment not found.', 404));
+    const room = await attachRoom(appt);
+    res.status(201).json({ success: true, data: { ...room, title: appt.title } });
+  } catch (err) { next(videoError(err)); }
+};
+
+exports.getVideoCall = async (req, res, next) => {
+  try {
+    const appt = await Appointment.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!appt) return next(new AppError('Appointment not found.', 404));
+
+    const room = appt.roomUrl
+      ? { roomUrl: appt.roomUrl, roomName: appt.roomName }
+      : await attachRoom(appt);
+
+    res.status(200).json({ success: true, data: { ...room, title: appt.title } });
+  } catch (err) { next(videoError(err)); }
+};
+
+exports.endVideoCall = async (req, res, next) => {
+  try {
+    const appt = await Appointment.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!appt) return next(new AppError('Appointment not found.', 404));
+
+    if (appt.roomName) {
+      try { await videoCall.deleteRoom(appt.roomName); } catch { /* best effort */ }
+    }
+    appt.roomUrl = undefined;
+    appt.roomName = undefined;
+    appt.videoCallEndedAt = new Date();
+    await appt.save();
+
+    res.status(200).json({ success: true, message: 'Video call ended.' });
   } catch (err) { next(err); }
 };
 
