@@ -1,82 +1,26 @@
 'use strict';
 
 /**
- * Daily.co video rooms for appointments.
- * Requires DAILY_API_KEY. DAILY_DOMAIN (your "*.daily.co" subdomain) is only
- * needed by getRoomUrl(); createRoom() returns the canonical URL from the API.
+ * Jitsi Meet video rooms for appointments.
+ *
+ * Free and open source — no API key, no account, no payment. A room is just a
+ * URL that comes into being the moment someone opens it, and disappears when
+ * everyone leaves. Override the server with JITSI_BASE_URL if you self-host.
  */
 
-const axios = require('axios');
-const logger = require('../utils/logger');
-
-const DAILY_BASE = 'https://api.daily.co/v1';
-const ROOM_TTL_SECONDS = 2 * 60 * 60; // 2 hours
-
-function notConfigured() {
-  const err = new Error('Video calling is not configured. Set DAILY_API_KEY.');
-  err.statusCode = 503;
-  return err;
-}
-
-function api() {
-  if (!process.env.DAILY_API_KEY) throw notConfigured();
-  return axios.create({
-    baseURL: DAILY_BASE,
-    timeout: 15000,
-    headers: {
-      Authorization: `Bearer ${process.env.DAILY_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-  });
-}
+const BASE_URL = (process.env.JITSI_BASE_URL || 'https://meet.jit.si').replace(/\/+$/, '');
 
 const roomName = (appointmentId) => `bizlyai-${appointmentId}`;
+const getRoomUrl = (appointmentId) => `${BASE_URL}/${roomName(appointmentId)}`;
 
-// ── Create (or fetch, if it already exists) a room for an appointment ──────
+// Kept async + same shape as before so the controller doesn't change.
 async function createRoom(appointmentId) {
-  const name = roomName(appointmentId);
-  const exp = Math.floor(Date.now() / 1000) + ROOM_TTL_SECONDS;
-
-  try {
-    const { data } = await api().post('/rooms', {
-      name,
-      privacy: 'public',
-      properties: {
-        exp,
-        max_participants: 10,
-        enable_chat: true,
-        enable_screenshare: true,
-      },
-    });
-    return { roomName: data.name, roomUrl: data.url };
-  } catch (err) {
-    // A room with this name already exists — reuse it.
-    const body = JSON.stringify(err.response?.data || '');
-    if (err.response?.status === 400 && /already exists/i.test(body)) {
-      const { data } = await api().get(`/rooms/${name}`);
-      return { roomName: data.name, roomUrl: data.url };
-    }
-    logger.error('Daily createRoom failed:', err.response?.data || err.message);
-    throw err;
-  }
+  return { roomName: roomName(appointmentId), roomUrl: getRoomUrl(appointmentId) };
 }
 
-// ── Delete a room ────────────────────────────────────────────────────────
-async function deleteRoom(name) {
-  try {
-    await api().delete(`/rooms/${name}`);
-    return true;
-  } catch (err) {
-    if (err.response?.status === 404) return true; // already gone
-    logger.error('Daily deleteRoom failed:', err.response?.data || err.message);
-    throw err;
-  }
-}
-
-// ── Deterministic room URL (no API call) ─────────────────────────────────
-function getRoomUrl(appointmentId) {
-  if (!process.env.DAILY_DOMAIN) return null;
-  return `https://${process.env.DAILY_DOMAIN}.daily.co/${roomName(appointmentId)}`;
+// Jitsi rooms are ephemeral; there is nothing to delete server-side.
+async function deleteRoom() {
+  return true;
 }
 
 module.exports = { createRoom, deleteRoom, getRoomUrl, roomName };
