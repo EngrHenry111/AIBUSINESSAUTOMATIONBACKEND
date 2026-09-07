@@ -72,16 +72,28 @@ const PLANS = {
 // ── Helper: Paystack API call ─────────────────────────────────────────────
 async function paystackAPI(method, endpoint, data) {
   if (!PAYSTACK_SECRET) throw new AppError('Payment service not configured.', 503);
-  const res = await axios({
-    method,
-    url: `${PAYSTACK_BASE}${endpoint}`,
-    data,
-    headers: {
-      Authorization: `Bearer ${PAYSTACK_SECRET}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  return res.data;
+  try {
+    const res = await axios({
+      method,
+      url: `${PAYSTACK_BASE}${endpoint}`,
+      data,
+      timeout: 20000,
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    return res.data;
+  } catch (err) {
+    // Turn Paystack / network errors into a readable operational error so the
+    // client sees the real reason (bad plan code, test/live mismatch, etc.)
+    const pmsg = err.response?.data?.message;
+    const code = err.response?.status;
+    logger.error(`Paystack ${method} ${endpoint} failed [${code || err.code}]: ${pmsg || err.message}`);
+    if (pmsg) throw new AppError(`Paystack: ${pmsg}`, code && code < 500 ? 400 : 502);
+    if (err.code === 'ECONNABORTED') throw new AppError('Paystack timed out. Please try again.', 504);
+    throw new AppError('Could not reach the payment provider. Please try again.', 502);
+  }
 }
 
 // ── GET /plans ────────────────────────────────────────────────────────────
@@ -247,12 +259,12 @@ exports.createSubscription = async (req, res, next) => {
     // card and creates the subscription in one step. `POST /subscription`
     // alone needs a pre-existing authorization, which a new customer doesn't
     // have — so we send them to the checkout page to add a card.
-    const amount = billingCycle === 'annual' ? planConfig.annualAmount : planConfig.monthlyAmount;
+    // NOTE: with `plan` set, Paystack ignores `amount` and uses the plan's
+    // price — so we don't send amount (avoids "amount not equal to plan").
+    logger.info(`Subscribe: company ${req.companyId} → ${plan}/${billingCycle} (plan code ${planCode})`);
     const response = await paystackAPI('POST', '/transaction/initialize', {
       email: req.user.email,
-      amount: amount * 100,
       plan: planCode,
-      currency: 'NGN',
       metadata: {
         companyId: String(req.companyId),
         userId: String(req.user._id),
@@ -260,11 +272,12 @@ exports.createSubscription = async (req, res, next) => {
         billingCycle,
         subscription: true,
       },
-      callback_url: `${(process.env.CLIENT_URL || '').split(',')[0]}/billing?payment=success`,
-      channels: ['card'],
+      callback_url: `${(process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim()}/billing?payment=success`,
     });
 
-    if (!response.status) throw new AppError('Could not start the subscription.', 502);
+    if (!response.status) {
+      throw new AppError(`Paystack: ${response.message || 'could not start the subscription.'}`, 400);
+    }
 
     company.subscription.billingCycle = billingCycle;
     company.subscription.paystackPlanCode = planCode;
@@ -285,8 +298,8 @@ exports.createSubscription = async (req, res, next) => {
     });
   } catch (err) {
     if (err.isOperational) return next(err);
-    logger.error('createSubscription error:', err.response?.data || err.message);
-    next(new AppError('Payment service error. Please try again.', 502));
+    logger.error('createSubscription error:', err.stack || err.message);
+    next(new AppError(`Subscription setup failed: ${err.message}`, 500));
   }
 };
 
