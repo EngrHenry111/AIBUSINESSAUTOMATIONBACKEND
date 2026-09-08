@@ -28,6 +28,7 @@ exports.createOrder = async (req, res, next) => {
     const count = await Order.countDocuments({ companyId: req.companyId });
     const orderNumber = `ORD-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
     const order = await Order.create({ ...req.body, companyId: req.companyId, orderNumber, createdBy: req.user._id });
+    require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: order });
   } catch (err) { next(err); }
 };

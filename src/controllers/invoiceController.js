@@ -49,6 +49,7 @@ exports.createInvoice = async (req, res, next) => {
       invoiceNumber,
       createdBy: req.user._id,
     });
+    require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: invoice });
   } catch (err) { next(err); }
 };

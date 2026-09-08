@@ -5,11 +5,17 @@ const Invoice = require('../models/Invoice');
 const Appointment = require('../models/Appointment');
 const Order = require('../models/Order');
 const Message = require('../models/Message');
+const cache = require('../utils/cache');
 
 exports.getNotifications = async (req, res, next) => {
   try {
     const companyId = req.companyId;
     const userId = req.user._id;
+
+    const cacheKey = `notifications_${userId}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.status(200).json({ success: true, ...cached, cached: true });
+
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
@@ -58,10 +64,8 @@ exports.getNotifications = async (req, res, next) => {
     // Sort by time descending
     notifications.sort((a, b) => new Date(b.time) - new Date(a.time));
 
-    res.status(200).json({
-      success: true,
-      data: notifications.slice(0, 15),
-      unreadMessages,
-    });
+    const result = { data: notifications.slice(0, 15), unreadMessages };
+    cache.set(cacheKey, result, 120); // 2 minutes
+    res.status(200).json({ success: true, ...result });
   } catch (err) { next(err); }
 };

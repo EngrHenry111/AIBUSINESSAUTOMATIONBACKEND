@@ -53,6 +53,7 @@ exports.createLead = async (req, res, next) => {
   try {
     normalizeNoteField(req.body);
     const lead = await Lead.create({ ...req.body, companyId: req.companyId, createdBy: req.user._id });
+    require('../utils/cache').del(`dashboard_${req.companyId}`);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'lead.create', resource: 'Lead', resourceId: lead._id, ip: req.ip });
     res.status(201).json({ success: true, data: lead });
   } catch (err) { next(err); }

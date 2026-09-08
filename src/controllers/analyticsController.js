@@ -11,10 +11,19 @@ const Appointment = require('../models/Appointment');
 const AuditLog = require('../models/AuditLog');
 const { generateStructured } = require('../services/groqService');
 const { AppError } = require('../middleware/errorMiddleware');
+const cache = require('../utils/cache');
+
+// Drop a company's cached dashboard — call after a lead/invoice/order changes
+const invalidateDashboard = (companyId) => cache.del(`dashboard_${companyId}`);
+exports.invalidateDashboard = invalidateDashboard;
 
 exports.getDashboardMetrics = async (req, res, next) => {
   try {
     const companyId = req.companyId;
+    const cacheKey = `dashboard_${companyId}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.status(200).json({ success: true, data: cached, cached: true });
+
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -79,9 +88,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       }},
     ]);
 
-    res.status(200).json({
-      success: true,
-      data: {
+    const payload = {
         overview: {
           documents: { total: totalDocs, thisMonth: docsThisMonth },
           conversations: { total: totalChats, thisMonth: chatsThisMonth },
@@ -122,8 +129,10 @@ exports.getDashboardMetrics = async (req, res, next) => {
           timestamp: log.timestamp,
           status: log.status,
         })),
-      },
-    });
+    };
+
+    cache.set(cacheKey, payload, 300); // 5 minutes
+    res.status(200).json({ success: true, data: payload });
   } catch (err) { next(err); }
 };
 

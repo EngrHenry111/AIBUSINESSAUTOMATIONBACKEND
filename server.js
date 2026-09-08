@@ -16,6 +16,9 @@ async function bootstrap() {
     await connectDB();
     logger.info('✅ MongoDB connected');
 
+    // Ensure hot-path compound indexes exist (non-blocking on failure)
+    require('./src/utils/ensureIndexes')().catch((e) => logger.warn(`ensureIndexes failed: ${e.message}`));
+
     const httpServer = http.createServer(app);
 
     const io = new SocketIOServer(httpServer, {

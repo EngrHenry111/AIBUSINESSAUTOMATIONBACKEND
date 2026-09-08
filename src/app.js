@@ -52,16 +52,12 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ─── Security Headers ────────────────────────────────────────────────────────
+// This is a pure JSON API (the SPA is served by Vercel), so a CSP here only
+// affects error pages / static assets — turn it off to avoid false positives.
 app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https://res.cloudinary.com'],
-    },
-  },
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
