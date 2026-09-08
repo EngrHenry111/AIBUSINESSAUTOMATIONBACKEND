@@ -5,6 +5,21 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const { generateAccessToken, generateRefreshToken, generateResetToken, setTokenCookies } = require('../utils/generateTokens');
+
+const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+const clientUrl = () => (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
+
+async function issueVerification(user) {
+  const { token, hash } = generateResetToken();
+  user.emailVerified = false;
+  user.emailVerifyToken = hash;
+  user.emailVerifyExpires = new Date(Date.now() + EMAIL_VERIFY_TTL_MS);
+  await user.save({ validateBeforeSave: false });
+  const link = `${clientUrl()}/verify-email?token=${token}`;
+  logger.info(`✉️  Email verification link for ${user.email}: ${link}`);
+  emailService.sendVerificationEmail(user.email, user.name, link)
+    .catch((err) => logger.warn(`Verification email failed for ${user.email}: ${err.message}`));
+}
 const { writeAuditLog } = require('../utils/auditLog');
 const { AppError } = require('../middleware/errorMiddleware');
 const emailService = require('../services/emailService');
@@ -46,6 +61,9 @@ exports.register = async (req, res, next) => {
     const refreshToken = generateRefreshToken(user._id);
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
+
+    // Email verification — non-blocking; user can use the app in the meantime
+    await issueVerification(user);
 
     // Welcome email — non-blocking, never crashes the request
     emailService.sendWelcome(email, name, companyName).catch(err =>
@@ -188,5 +206,42 @@ exports.resetPassword = async (req, res, next) => {
     await user.save();
 
     res.status(200).json({ success: true, message: 'Password reset successfully. You can now log in.' });
+  } catch (err) { next(err); }
+};
+
+// ── GET /auth/verify-email?token=xxx ────────────────────────────────────
+exports.verifyEmail = async (req, res, next) => {
+  try {
+    const token = (req.query.token || '').trim();
+    if (!token) return next(new AppError('Verification token is required.', 400));
+
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({ emailVerifyToken: hash }).select('+emailVerifyToken +emailVerifyExpires');
+
+    if (!user) return next(new AppError('This verification link is invalid or has already been used.', 400));
+    if (user.emailVerifyExpires && user.emailVerifyExpires.getTime() < Date.now()) {
+      return next(new AppError('This verification link has expired. Please request a new one.', 400));
+    }
+
+    user.emailVerified = true;
+    user.emailVerifyToken = undefined;
+    user.emailVerifyExpires = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.email_verified', ip: req.ip });
+    res.status(200).json({ success: true, message: 'Email verified!' });
+  } catch (err) { next(err); }
+};
+
+// ── POST /auth/resend-verification (protected) ─────────────────────────
+exports.resendVerification = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return next(new AppError('User not found.', 404));
+    if (user.emailVerified) {
+      return res.status(200).json({ success: true, message: 'Your email is already verified.' });
+    }
+    await issueVerification(user);
+    res.status(200).json({ success: true, message: 'Verification email sent. Check your inbox.' });
   } catch (err) { next(err); }
 };

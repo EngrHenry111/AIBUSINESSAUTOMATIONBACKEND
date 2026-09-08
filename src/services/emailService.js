@@ -267,6 +267,27 @@ async function sendPaymentFailed(email, name, planName, amount) {
   return send({ to: email, subject: `Payment failed for your ${planName} plan`, html });
 }
 
+async function sendVerificationEmail(email, name, link) {
+  const html = baseTemplate('Verify your email', `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Verify your email address</h2>
+    <p style="color:#475569;margin:0 0 20px;">Welcome, ${name || 'there'}!</p>
+    <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
+      Please confirm this is your email so we can secure your BizlyAI account and
+      send you important updates. This link expires in <strong>24 hours</strong>.
+    </p>
+    <div style="text-align:center;margin:32px 0;">
+      <a href="${link}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        Verify Email
+      </a>
+    </div>
+    <p style="color:#94a3b8;font-size:13px;margin:0;">
+      If you didn't create a BizlyAI account, you can ignore this email.<br/>
+      Or paste this link: <a href="${link}" style="color:#6366f1;">${link}</a>
+    </p>
+  `);
+  return send({ to: email, subject: 'Verify your BizlyAI email address', html });
+}
+
 // ── Core send function ─────────────────────────────────────────────────────
 async function send({ to, subject, html, text }) {
   if (!process.env.RESEND_API_KEY && !process.env.EMAIL_PASS) {
@@ -294,6 +315,7 @@ module.exports = {
   sendPortalLink,
   sendSubscriptionWarning,
   sendPaymentFailed,
+  sendVerificationEmail,
   baseTemplate,
   send,
 };

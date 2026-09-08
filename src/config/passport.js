@@ -24,11 +24,16 @@ async function verifyGoogleProfile(accessToken, refreshToken, profile, done) {
     let user = await User.findOne({ email });
 
     if (user) {
-      // Update avatar if not set
-      if (!user.avatar && avatar) {
-        user.avatar = avatar;
-        await user.save({ validateBeforeSave: false });
+      let dirty = false;
+      if (!user.avatar && avatar) { user.avatar = avatar; dirty = true; }
+      // Signing in with Google proves ownership of the email
+      if (!user.emailVerified) {
+        user.emailVerified = true;
+        user.emailVerifyToken = undefined;
+        user.emailVerifyExpires = undefined;
+        dirty = true;
       }
+      if (dirty) await user.save({ validateBeforeSave: false });
       return done(null, user);
     }
 

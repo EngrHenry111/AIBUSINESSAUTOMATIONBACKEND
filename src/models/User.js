@@ -26,8 +26,11 @@ const userSchema = new mongoose.Schema({
   loginIPs: [{ ip: String, timestamp: Date }],
   failedLoginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date },
-  emailVerified: { type: Boolean, default: false },
+  // default true so users that predate this field are treated as verified;
+  // register() explicitly sets it false for new sign-ups
+  emailVerified: { type: Boolean, default: true },
   emailVerifyToken: { type: String, select: false },
+  emailVerifyExpires: { type: Date, select: false },
   preferences: {
     theme: { type: String, enum: ['light', 'dark', 'system'], default: 'system' },
     language: { type: String, default: 'en' },
@@ -71,7 +74,7 @@ userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password; delete obj.refreshToken;
   delete obj.passwordResetToken; delete obj.passwordResetExpires;
-  delete obj.emailVerifyToken; delete obj.__v;
+  delete obj.emailVerifyToken; delete obj.emailVerifyExpires; delete obj.__v;
   return obj;
 };
 

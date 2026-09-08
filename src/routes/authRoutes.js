@@ -36,6 +36,10 @@ router.post('/reset-password/:token', authLimiter, [
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
 ], validate, ctrl.resetPassword);
 
+// ─── Email verification ──────────────────────────────────────────────────────
+router.get('/verify-email', ctrl.verifyEmail);
+router.post('/resend-verification', protect, authLimiter, ctrl.resendVerification);
+
 // ─── Google OAuth ────────────────────────────────────────────────────────────
 if (googleEnabled) {
   router.get('/google',
