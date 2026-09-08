@@ -12,7 +12,7 @@ const leadSchema = new mongoose.Schema({
   source: { type: String, enum: ['website', 'referral', 'social', 'email', 'cold_call', 'event', 'other'], default: 'other' },
   status: {
     type: String,
-    enum: ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'],
+    enum: ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'converted'],
     default: 'new',
   },
   score: { type: Number, default: 0, min: 0, max: 100 },

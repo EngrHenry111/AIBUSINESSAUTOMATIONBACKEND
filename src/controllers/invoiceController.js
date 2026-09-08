@@ -5,6 +5,7 @@ const Company = require('../models/Company');
 const { generateStructured, runAgent } = require('../services/groqService');
 const emailService = require('../services/emailService');
 const { AppError } = require('../middleware/errorMiddleware');
+const { recordCustomerTransaction } = require('../utils/customerSync');
 const logger = require('../utils/logger');
 
 const clientUrl = () =>
@@ -49,6 +50,11 @@ exports.createInvoice = async (req, res, next) => {
       invoiceNumber,
       createdBy: req.user._id,
     });
+    await recordCustomerTransaction({
+      companyId: req.companyId, customer: invoice.customer, amount: invoice.total,
+      countsAsOrder: false, date: invoice.issuedAt, userId: req.user._id,
+    });
+
     require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: invoice });
   } catch (err) { next(err); }

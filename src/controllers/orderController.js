@@ -5,6 +5,7 @@ const Product = require('../models/Product');
 const { runAgent } = require('../services/groqService');
 const { AppError } = require('../middleware/errorMiddleware');
 const { applyStockAdjustment } = require('./productController');
+const { recordCustomerTransaction } = require('../utils/customerSync');
 
 const RELEASES_STOCK = ['cancelled', 'refunded'];
 
@@ -68,6 +69,11 @@ exports.createOrder = async (req, res, next) => {
       await commitOrderStock(order, req.user._id, req.app.get('io'));
       await order.save();
     }
+
+    await recordCustomerTransaction({
+      companyId: req.companyId, customer: order.customer, amount: order.total,
+      countsAsOrder: true, date: order.createdAt, userId: req.user._id,
+    });
 
     require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: order });

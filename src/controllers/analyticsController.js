@@ -8,6 +8,7 @@ const Lead = require('../models/Lead');
 const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const Customer = require('../models/Customer');
 const Appointment = require('../models/Appointment');
 const AuditLog = require('../models/AuditLog');
 const { generateStructured } = require('../services/groqService');
@@ -39,6 +40,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       upcomingAppointments,
       recentActivity,
       productAgg,
+      totalCustomers, customersThisMonth,
     ] = await Promise.all([
       Company.findById(companyId).select('usage limits subscription'),
       Document.countDocuments({ companyId, status: 'ready' }),
@@ -70,6 +72,8 @@ exports.getDashboardMetrics = async (req, res, next) => {
           ] }, 1, 0] } },
         } },
       ]),
+      Customer.countDocuments({ companyId }),
+      Customer.countDocuments({ companyId, createdAt: { $gte: startOfMonth } }),
     ]);
 
     // Lead pipeline stats
@@ -129,6 +133,10 @@ exports.getDashboardMetrics = async (req, res, next) => {
           active: productAgg[0]?.active || 0,
           outOfStock: productAgg[0]?.outOfStock || 0,
           lowStock: productAgg[0]?.lowStock || 0,
+        },
+        customers: {
+          total: totalCustomers,
+          newThisMonth: customersThisMonth,
         },
         ai: {
           avgConfidence: aiMetrics[0]?.avgConfidence ? Math.round(aiMetrics[0].avgConfidence) : 0,
