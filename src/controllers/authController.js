@@ -22,26 +22,9 @@ async function issueVerification(user) {
 }
 const { writeAuditLog } = require('../utils/auditLog');
 const { AppError } = require('../middleware/errorMiddleware');
+const { sendTokenResponse } = require('../utils/authResponse');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
-
-const sendTokenResponse = (user, company, statusCode, res) => {
-  const accessToken = generateAccessToken(user._id);
-  const refreshToken = generateRefreshToken(user._id);
-  setTokenCookies(res, accessToken, refreshToken);
-  res.status(statusCode).json({
-    success: true,
-    accessToken,
-    refreshToken,
-    user: user.toJSON(),
-    company: company ? {
-      id: company._id,
-      name: company.companyName,
-      plan: company.subscription?.plan,
-      settings: company.settings,
-    } : null,
-  });
-};
 
 exports.register = async (req, res, next) => {
   try {
@@ -93,8 +76,17 @@ exports.login = async (req, res, next) => {
     }
     if (user.status !== 'active') return next(new AppError('Account is not active.', 403));
 
+    // Password OK — clear lockout
     user.failedLoginAttempts = 0;
     user.lockUntil = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    // 2FA gate — issue a short-lived temp token, no session yet
+    if (user.twoFactorEnabled) {
+      const tempToken = jwt.sign({ id: user._id, twofa: true }, process.env.JWT_SECRET, { expiresIn: '5m' });
+      return res.status(200).json({ success: true, requiresTwoFactor: true, tempToken });
+    }
+
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
@@ -230,6 +222,39 @@ exports.verifyEmail = async (req, res, next) => {
 
     await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.email_verified', ip: req.ip });
     res.status(200).json({ success: true, message: 'Email verified!' });
+  } catch (err) { next(err); }
+};
+
+// ── POST /auth/2fa/complete — finish a 2FA login with a TOTP code ───────
+exports.complete2FALogin = async (req, res, next) => {
+  try {
+    const { tempToken } = req.body;
+    const code = String(req.body.token || '').replace(/\s/g, '');
+    if (!tempToken || !code) return next(new AppError('Your authenticator code is required.', 400));
+
+    let decoded;
+    try { decoded = jwt.verify(tempToken, process.env.JWT_SECRET); }
+    catch { return next(new AppError('Your login session expired. Please sign in again.', 401)); }
+    if (!decoded.twofa) return next(new AppError('Invalid login session.', 401));
+
+    const user = await User.findById(decoded.id).select('+twoFactorSecret +refreshToken');
+    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
+      return next(new AppError('Two-factor authentication is not set up for this account.', 400));
+    }
+
+    const speakeasy = require('speakeasy');
+    const ok = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token: code, window: 1 });
+    if (!ok) return next(new AppError('Incorrect code. Please try again.', 401));
+
+    user.lastLogin = new Date();
+    user.loginCount = (user.loginCount || 0) + 1;
+    user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
+    user.refreshToken = generateRefreshToken(user._id);
+    await user.save({ validateBeforeSave: false });
+
+    const company = user.companyId ? await Company.findById(user.companyId) : null;
+    await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.login_2fa', ip: req.ip });
+    sendTokenResponse(user, company, 200, res);
   } catch (err) { next(err); }
 };
 

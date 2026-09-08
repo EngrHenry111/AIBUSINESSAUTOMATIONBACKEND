@@ -40,6 +40,7 @@ const searchRoutes = require('./routes/searchRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const portalRoutes = require('./routes/portalRoutes');
+const twoFactorRoutes = require('./routes/twoFactorRoutes');
 
 
 const app = express();
@@ -157,6 +158,7 @@ app.get('/health', (req, res) => {
 const API = '/api/v1';
 
 app.use(`${API}/auth`, authRoutes);
+app.use(API, twoFactorRoutes); // /2fa/* and /auth/2fa/*
 app.use(`${API}/users`, userRoutes);
 app.use(`${API}/companies`, companyRoutes);
 app.use(`${API}/documents`, documentRoutes);

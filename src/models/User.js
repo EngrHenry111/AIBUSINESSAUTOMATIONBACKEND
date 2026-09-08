@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema({
   emailVerified: { type: Boolean, default: true },
   emailVerifyToken: { type: String, select: false },
   emailVerifyExpires: { type: Date, select: false },
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, select: false },
+  backupCodes: { type: [{ code: String, used: { type: Boolean, default: false } }], select: false, default: undefined },
   preferences: {
     theme: { type: String, enum: ['light', 'dark', 'system'], default: 'system' },
     language: { type: String, default: 'en' },
@@ -74,7 +77,8 @@ userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password; delete obj.refreshToken;
   delete obj.passwordResetToken; delete obj.passwordResetExpires;
-  delete obj.emailVerifyToken; delete obj.emailVerifyExpires; delete obj.__v;
+  delete obj.emailVerifyToken; delete obj.emailVerifyExpires;
+  delete obj.twoFactorSecret; delete obj.backupCodes; delete obj.__v;
   return obj;
 };
 
