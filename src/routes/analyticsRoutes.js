@@ -9,5 +9,6 @@ router.use(protect, enforceTenant);
 
 router.get('/dashboard', ctrl.getDashboardMetrics);
 router.get('/insights', ctrl.getAIInsights);
+router.get('/usage', ctrl.getUsage);
 
 module.exports = router;

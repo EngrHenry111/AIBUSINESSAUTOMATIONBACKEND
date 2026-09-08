@@ -1,6 +1,7 @@
 'use strict';
 
 const Company = require('../models/Company');
+const User = require('../models/User');
 const Document = require('../models/Document');
 const Chat = require('../models/Chat');
 const Lead = require('../models/Lead');
@@ -9,6 +10,7 @@ const Order = require('../models/Order');
 const Appointment = require('../models/Appointment');
 const AuditLog = require('../models/AuditLog');
 const { generateStructured } = require('../services/groqService');
+const { AppError } = require('../middleware/errorMiddleware');
 
 exports.getDashboardMetrics = async (req, res, next) => {
   try {
@@ -144,5 +146,55 @@ exports.getAIInsights = async (req, res, next) => {
     if (leadCount > 0) recommendations.push({ type: 'success', message: `${leadCount} new lead${leadCount > 1 ? 's' : ''} in your pipeline ready for follow-up.`, action: '/leads?status=new', priority: 'medium' });
 
     res.status(200).json({ success: true, data: { recommendations } });
+  } catch (err) { next(err); }
+};
+
+// ── GET /analytics/usage — current usage vs plan limits ─────────────────
+exports.getUsage = async (req, res, next) => {
+  try {
+    const companyId = req.companyId;
+    const company = await Company.findById(companyId).select('subscription limits').lean();
+    if (!company) return next(new AppError('Company not found.', 404));
+
+    const sub = company.subscription || {};
+    const limits = company.limits || {};
+    const plan = sub.plan || 'trial';
+
+    const now = new Date();
+    const periodStart = sub.currentPeriodStart
+      ? new Date(sub.currentPeriodStart)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = sub.currentPeriodEnd
+      ? new Date(sub.currentPeriodEnd)
+      : new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const [aiAgg, docsUsed, teamUsed] = await Promise.all([
+      Chat.aggregate([
+        { $match: { companyId, lastMessageAt: { $gte: periodStart } } },
+        { $unwind: '$messages' },
+        { $match: { 'messages.role': 'user', 'messages.createdAt': { $gte: periodStart } } },
+        { $count: 'n' },
+      ]),
+      Document.countDocuments({ companyId, status: { $ne: 'failed' } }),
+      User.countDocuments({ companyId, status: 'active' }),
+    ]);
+
+    const meter = (used, limit) => {
+      const lim = Number(limit) || 0;
+      return { used, limit: lim, percent: lim > 0 ? Math.min(100, Math.round((used / lim) * 100)) : 0 };
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        aiQuestions: meter(aiAgg[0]?.n || 0, limits.maxQuestionsPerMonth),
+        documents: meter(docsUsed, limits.maxDocuments),
+        teamMembers: meter(teamUsed, limits.maxUsers),
+        plan,
+        periodStart,
+        periodEnd,
+        daysRemaining: Math.max(0, Math.ceil((periodEnd - now) / 86400000)),
+      },
+    });
   } catch (err) { next(err); }
 };

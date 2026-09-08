@@ -7,30 +7,47 @@ const Company = require('../models/Company');
 const { getEmbedding } = require('../services/embeddingService');
 const chunkText = require('../utils/chunkText');
 const { AppError } = require('../middleware/errorMiddleware');
+const { downloadFile } = require('../utils/downloadFile');
 const logger = require('../utils/logger');
 const pdf = require('pdf-parse');
 const mammoth = require('mammoth');
 const fs = require('fs');
 
-// ── Text extraction from local file ───────────────────────────────────────
+// ── Text extraction ───────────────────────────────────────────────────────
+async function extractTextFromBuffer(fileType, buffer) {
+  if (fileType === 'pdf') return (await pdf(buffer)).text;
+  if (fileType === 'docx') return (await mammoth.extractRawText({ buffer })).value;
+  if (fileType === 'txt') return buffer.toString('utf8');
+  throw new Error(`Unsupported file type: ${fileType}`);
+}
+
 async function extractText(fileType, localPath) {
   if (!localPath || !fs.existsSync(localPath)) {
     throw new Error(`Local file not found: ${localPath}`);
   }
-  const buffer = fs.readFileSync(localPath);
+  return extractTextFromBuffer(fileType, fs.readFileSync(localPath));
+}
 
-  if (fileType === 'pdf') {
-    const data = await pdf(buffer);
-    return data.text;
+// ── Chunk one document's text and persist its embedded chunks ─────────────
+async function saveEmbeddedChunks(doc, chunkArray, companyId, userId) {
+  let successCount = 0;
+  for (let i = 0; i < chunkArray.length; i++) {
+    const base = {
+      companyId, documentId: doc._id, knowledgeBaseId: doc.knowledgeBaseId,
+      source: doc.originalName, chunk: chunkArray[i], chunkIndex: i,
+      metadata: { charCount: chunkArray[i].length, wordCount: chunkArray[i].split(/\s+/).length },
+      uploadedBy: userId,
+    };
+    try {
+      const embedding = await getEmbedding(chunkArray[i]);
+      await DocumentChunk.create({ ...base, embedding });
+      successCount++;
+    } catch (e) {
+      logger.warn(`Chunk ${i} embedding failed: ${e.message}`);
+      await DocumentChunk.create({ ...base, embedding: [] }).catch(() => {});
+    }
   }
-  if (fileType === 'docx') {
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value;
-  }
-  if (fileType === 'txt') {
-    return buffer.toString('utf8');
-  }
-  throw new Error(`Unsupported file type: ${fileType}`);
+  return successCount;
 }
 
 // ── Upload to Cloudinary in background (optional) ─────────────────────────
@@ -132,28 +149,7 @@ async function processDocument(doc, localPath, companyId, userId) {
 
     // 3. Embed
     await Document.findByIdAndUpdate(doc._id, { status: 'embedding' });
-    let successCount = 0;
-
-    for (let i = 0; i < chunks.length; i++) {
-      try {
-        const embedding = await getEmbedding(chunks[i]);
-        await DocumentChunk.create({
-          companyId, documentId: doc._id, knowledgeBaseId: doc.knowledgeBaseId,
-          source: doc.originalName, chunk: chunks[i], chunkIndex: i, embedding,
-          metadata: { charCount: chunks[i].length, wordCount: chunks[i].split(/\s+/).length },
-          uploadedBy: userId,
-        });
-        successCount++;
-      } catch (e) {
-        logger.warn(`Chunk ${i} embedding failed: ${e.message}`);
-        await DocumentChunk.create({
-          companyId, documentId: doc._id, knowledgeBaseId: doc.knowledgeBaseId,
-          source: doc.originalName, chunk: chunks[i], chunkIndex: i, embedding: [],
-          metadata: { charCount: chunks[i].length, wordCount: chunks[i].split(/\s+/).length },
-          uploadedBy: userId,
-        }).catch(() => {});
-      }
-    }
+    const successCount = await saveEmbeddedChunks(doc, chunks, companyId, userId);
 
     // 4. Mark ready
     await Document.findByIdAndUpdate(doc._id, {
@@ -245,4 +241,55 @@ exports.getDocumentStatus = async (req, res, next) => {
     if (!doc) return next(new AppError('Document not found.', 404));
     res.status(200).json({ success: true, data: doc });
   } catch (err) { next(err); }
+};
+
+// ── POST /documents/:id/reembed — wipe chunks and reprocess ───────────────
+exports.reembed = async (req, res, next) => {
+  const IN_PROGRESS = ['uploading', 'extracting', 'chunking', 'embedding', 'indexing', 'processing'];
+  try {
+    const doc = await Document.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!doc) return next(new AppError('Document not found.', 404));
+    if (IN_PROGRESS.includes(doc.status)) {
+      return next(new AppError('This document is already being processed.', 409));
+    }
+    if (!doc.cloudinaryUrl) {
+      return next(new AppError('The original file is no longer stored for this document. Re-upload it to re-embed.', 422));
+    }
+
+    // 1. Remove existing chunks
+    const removed = await DocumentChunk.deleteMany({ documentId: doc._id, companyId: req.companyId });
+
+    // 2. Mark processing
+    doc.status = 'processing';
+    doc.processingError = undefined;
+    doc.chunksCount = 0;
+    await doc.save();
+
+    // 3. Re-run the pipeline from the stored original file
+    const buffer = await downloadFile(doc.cloudinaryUrl, doc.cloudinaryPublicId);
+    const text = await extractTextFromBuffer(doc.fileType, buffer);
+    if (!text || !text.trim()) throw new Error('No text could be extracted from the stored file.');
+
+    const chunks = chunkText(text, { chunkSize: 800, overlap: 150 });
+    if (!chunks.length) throw new Error('Document produced no chunks.');
+
+    const newCount = await saveEmbeddedChunks(doc, chunks, req.companyId, doc.uploadedBy || req.user._id);
+
+    doc.status = 'ready';
+    doc.chunksCount = newCount;
+    doc.wordCount = text.split(/\s+/).length;
+    await doc.save();
+
+    // Keep the company chunk counter roughly in sync
+    await Company.findByIdAndUpdate(req.companyId, {
+      $inc: { 'usage.chunksCount': newCount - (removed.deletedCount || 0) },
+    });
+
+    logger.info(`♻️  Re-embedded ${doc.name}: ${newCount} chunks (was ${removed.deletedCount})`);
+    res.status(200).json({ success: true, chunks: newCount });
+  } catch (err) {
+    logger.error(`reembed failed for ${req.params.id}: ${err.message}`);
+    await Document.findByIdAndUpdate(req.params.id, { status: 'failed', processingError: err.message }).catch(() => {});
+    next(new AppError('Re-embed failed. Please try again.', 500));
+  }
 };

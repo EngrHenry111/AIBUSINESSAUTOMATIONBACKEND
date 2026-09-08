@@ -14,7 +14,7 @@ const documentSchema = new mongoose.Schema({
   cloudinaryPublicId: { type: String },
   status: {
     type: String,
-    enum: ['uploading', 'extracting', 'chunking', 'embedding', 'indexing', 'ready', 'failed'],
+    enum: ['uploading', 'extracting', 'chunking', 'embedding', 'indexing', 'processing', 'ready', 'failed'],
     default: 'uploading',
   },
   processingError: { type: String },

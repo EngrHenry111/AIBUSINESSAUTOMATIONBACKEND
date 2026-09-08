@@ -15,6 +15,7 @@ router.get('/:id/status', ctrl.getDocumentStatus);
 
 // uploadDocument.single('file') parses the multipart form and puts file on req.file
 router.post('/upload', uploadLimiter, uploadDocument.single('file'), ctrl.uploadDocument);
+router.post('/:id/reembed', ctrl.reembed);
 router.delete('/:id', ctrl.deleteDocument);
 
 module.exports = router;
