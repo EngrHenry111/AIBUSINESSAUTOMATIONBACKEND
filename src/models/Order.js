@@ -6,7 +6,14 @@ const orderSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   orderNumber: { type: String, required: true },
   customer: { name: String, email: String, phone: String },
-  items: [{ name: String, quantity: Number, price: Number, sku: String }],
+  items: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    name: String,
+    quantity: Number,
+    price: Number,
+    sku: String,
+  }],
+  stockApplied: { type: Boolean, default: false },
   total: Number,
   currency: { type: String, default: 'USD' },
   status: {

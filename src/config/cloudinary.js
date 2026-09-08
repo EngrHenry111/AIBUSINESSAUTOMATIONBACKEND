@@ -61,4 +61,16 @@ const uploadAvatar = multer({
   },
 });
 
-module.exports = { cloudinary, uploadDocument, uploadAvatar, USE_CLOUDINARY };
+const uploadProductImage = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, tempDir),
+    filename: (req, file, cb) => cb(null, `prod-${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'), false);
+  },
+});
+
+module.exports = { cloudinary, uploadDocument, uploadAvatar, uploadProductImage, USE_CLOUDINARY };

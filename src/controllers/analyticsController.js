@@ -7,6 +7,7 @@ const Chat = require('../models/Chat');
 const Lead = require('../models/Lead');
 const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
+const Product = require('../models/Product');
 const Appointment = require('../models/Appointment');
 const AuditLog = require('../models/AuditLog');
 const { generateStructured } = require('../services/groqService');
@@ -37,6 +38,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       invoices,
       upcomingAppointments,
       recentActivity,
+      productAgg,
     ] = await Promise.all([
       Company.findById(companyId).select('usage limits subscription'),
       Document.countDocuments({ companyId, status: 'ready' }),
@@ -54,6 +56,20 @@ exports.getDashboardMetrics = async (req, res, next) => {
       ]),
       Appointment.countDocuments({ companyId, scheduledAt: { $gte: now }, status: 'confirmed' }),
       AuditLog.find({ companyId }).sort({ timestamp: -1 }).limit(10).populate('userId', 'name avatar'),
+      Product.aggregate([
+        { $match: { companyId } },
+        { $group: {
+          _id: null,
+          total: { $sum: { $cond: [{ $ne: ['$status', 'inactive'] }, 1, 0] } },
+          active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+          outOfStock: { $sum: { $cond: [{ $eq: ['$status', 'out_of_stock'] }, 1, 0] } },
+          lowStock: { $sum: { $cond: [{ $and: [
+            { $ne: ['$status', 'inactive'] },
+            { $eq: ['$stock.trackStock', true] },
+            { $lte: ['$stock.quantity', '$stock.lowStockThreshold'] },
+          ] }, 1, 0] } },
+        } },
+      ]),
     ]);
 
     // Lead pipeline stats
@@ -108,6 +124,12 @@ exports.getDashboardMetrics = async (req, res, next) => {
             .reduce((s, i) => s + i.total, 0),
         },
         appointments: { upcoming: upcomingAppointments },
+        products: {
+          total: productAgg[0]?.total || 0,
+          active: productAgg[0]?.active || 0,
+          outOfStock: productAgg[0]?.outOfStock || 0,
+          lowStock: productAgg[0]?.lowStock || 0,
+        },
         ai: {
           avgConfidence: aiMetrics[0]?.avgConfidence ? Math.round(aiMetrics[0].avgConfidence) : 0,
           thumbsUp: aiMetrics[0]?.thumbsUp || 0,

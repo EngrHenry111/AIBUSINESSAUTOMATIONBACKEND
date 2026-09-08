@@ -1,8 +1,43 @@
 'use strict';
 
 const Order = require('../models/Order');
+const Product = require('../models/Product');
 const { runAgent } = require('../services/groqService');
 const { AppError } = require('../middleware/errorMiddleware');
+const { applyStockAdjustment } = require('./productController');
+
+const RELEASES_STOCK = ['cancelled', 'refunded'];
+
+// Deduct stock for every line item that references a product (once per order).
+async function commitOrderStock(order, userId, io) {
+  if (order.stockApplied) return;
+  let anyLow = false;
+  for (const item of order.items || []) {
+    if (!item.productId || !item.quantity) continue;
+    const product = await Product.findById(item.productId);
+    if (!product || !product.stock.trackStock) continue;
+    const { low } = await applyStockAdjustment(product, -Math.abs(item.quantity), {
+      reason: 'sale', orderId: order._id, userId, note: `Order ${order.orderNumber}`,
+    });
+    if (low) anyLow = true;
+  }
+  order.stockApplied = true;
+  if (anyLow && io) io.to(`company:${order.companyId}`).emit('notification:refresh', { type: 'low_stock' });
+}
+
+// Return stock to inventory when an applied order is cancelled/refunded.
+async function releaseOrderStock(order, userId) {
+  if (!order.stockApplied) return;
+  for (const item of order.items || []) {
+    if (!item.productId || !item.quantity) continue;
+    const product = await Product.findById(item.productId);
+    if (!product || !product.stock.trackStock) continue;
+    await applyStockAdjustment(product, Math.abs(item.quantity), {
+      reason: 'return', orderId: order._id, userId, note: `Order ${order.orderNumber} ${order.status}`,
+    });
+  }
+  order.stockApplied = false;
+}
 
 exports.getOrders = async (req, res, next) => {
   try {
@@ -28,6 +63,12 @@ exports.createOrder = async (req, res, next) => {
     const count = await Order.countDocuments({ companyId: req.companyId });
     const orderNumber = `ORD-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
     const order = await Order.create({ ...req.body, companyId: req.companyId, orderNumber, createdBy: req.user._id });
+
+    if (!RELEASES_STOCK.includes(order.status)) {
+      await commitOrderStock(order, req.user._id, req.app.get('io'));
+      await order.save();
+    }
+
     require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: order });
   } catch (err) { next(err); }
@@ -46,12 +87,26 @@ exports.updateOrder = async (req, res, next) => {
     const order = await Order.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!order) return next(new AppError('Order not found.', 404));
 
+    const newStatus = req.body.status;
+    const statusChanged = newStatus && newStatus !== order.status;
+
     // Add timeline entry on status change
-    if (req.body.status && req.body.status !== order.status) {
-      order.timeline.push({ status: req.body.status, description: `Status changed to ${req.body.status}`, timestamp: new Date() });
+    if (statusChanged) {
+      order.timeline.push({ status: newStatus, description: `Status changed to ${newStatus}`, timestamp: new Date() });
     }
     Object.assign(order, req.body);
+
+    if (statusChanged) {
+      if (newStatus === 'delivered') order.deliveredAt = order.deliveredAt || new Date();
+      if (RELEASES_STOCK.includes(newStatus)) {
+        await releaseOrderStock(order, req.user._id);
+      } else {
+        await commitOrderStock(order, req.user._id, req.app.get('io'));
+      }
+    }
+
     await order.save();
+    require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(200).json({ success: true, data: order });
   } catch (err) { next(err); }
 };

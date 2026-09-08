@@ -3,6 +3,7 @@
 const Chat = require('../models/Chat');
 const DocumentChunk = require('../models/DocumentChunk');
 const Company = require('../models/Company');
+const Product = require('../models/Product');
 const { getEmbedding } = require('../services/embeddingService');
 const { generateAnswer, streamAnswer } = require('../services/groqService');
 const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
@@ -59,6 +60,36 @@ exports.getChat = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// Fallback: when the knowledge base can't answer, see if the customer is asking
+// about a product we sell and answer from the catalogue instead.
+async function answerFromCatalogue(companyId, question) {
+  const words = (question || '').toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+  if (!words.length) return null;
+  const STOP = new Set(['the', 'and', 'you', 'have', 'this', 'that', 'what', 'how', 'much', 'does', 'can', 'are', 'for', 'your', 'about', 'price', 'cost', 'stock', 'available', 'buy', 'sell', 'with']);
+  const terms = [...new Set(words.filter((w) => !STOP.has(w)))];
+  if (!terms.length) return null;
+
+  const rx = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const products = await Product.find({
+    companyId,
+    status: { $ne: 'inactive' },
+    $or: [{ name: { $regex: rx, $options: 'i' } }, { tags: { $regex: rx, $options: 'i' } }, { sku: { $regex: rx, $options: 'i' } }],
+  }).limit(4).lean();
+
+  if (!products.length) return null;
+
+  const cur = (c) => (c === 'NGN' ? '₦' : c === 'USD' ? '$' : `${c} `);
+  const lines = products.map((p) => {
+    const avail = !p.stock?.trackStock
+      ? 'available'
+      : p.stock.quantity > 0
+        ? `in stock (${p.stock.quantity} ${p.unit || 'unit'}${p.stock.quantity === 1 ? '' : 's'} available)`
+        : (p.stock.allowOutOfStock ? 'available on backorder' : 'currently out of stock');
+    return `• ${p.name} — ${cur(p.currency || 'NGN')}${Number(p.price).toLocaleString()}, ${avail}.`;
+  });
+  return `Here's what we have that matches your question:\n\n${lines.join('\n')}`;
+}
+
 exports.askQuestion = async (req, res, next) => {
   try {
     const { chatId, question, knowledgeBaseId } = req.body;
@@ -100,15 +131,17 @@ exports.askQuestion = async (req, res, next) => {
     const allChunks = await DocumentChunk.find(chunkFilter).lean();
 
     if (allChunks.length === 0) {
-      const noDocsMsg = 'No documents found in your knowledge base. Please upload documents first.';
-      chat.messages.push({ role: 'assistant', content: noDocsMsg, confidence: 0, sources: [] });
+      const catalogueAnswer = await answerFromCatalogue(req.companyId, question);
+      const noDocsMsg = catalogueAnswer
+        || 'No documents found in your knowledge base. Please upload documents first.';
+      chat.messages.push({ role: 'assistant', content: noDocsMsg, confidence: catalogueAnswer ? 60 : 0, sources: [] });
       chat.lastMessageAt = new Date();
       await chat.save();
       return res.status(200).json({
         success: true,
         chatId: chat._id,
         answer: noDocsMsg,
-        confidence: 0,
+        confidence: catalogueAnswer ? 60 : 0,
         sources: [],
         citations: [],
       });
@@ -121,15 +154,17 @@ exports.askQuestion = async (req, res, next) => {
     const topScore = reranked[0]?.rerankScore || 0;
 
     if (!reranked.length || topScore < 0.05) {
-      const notFoundMsg = "I couldn't find sufficient information in your knowledge base to answer that question.";
-      chat.messages.push({ role: 'assistant', content: notFoundMsg, confidence: 0, sources: [] });
+      const catalogueAnswer = await answerFromCatalogue(req.companyId, question);
+      const notFoundMsg = catalogueAnswer
+        || "I couldn't find sufficient information in your knowledge base to answer that question.";
+      chat.messages.push({ role: 'assistant', content: notFoundMsg, confidence: catalogueAnswer ? 60 : 0, sources: [] });
       chat.lastMessageAt = new Date();
       await chat.save();
       return res.status(200).json({
         success: true,
         chatId: chat._id,
         answer: notFoundMsg,
-        confidence: 0,
+        confidence: catalogueAnswer ? 60 : 0,
         sources: [],
         citations: [],
       });
