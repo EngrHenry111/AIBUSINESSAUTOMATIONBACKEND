@@ -116,6 +116,15 @@ app.use(passport.initialize());
 // ─── Compression ─────────────────────────────────────────────────────────────
 app.use(compression());
 
+// ─── Static: user avatars (fallback when Cloudinary isn't configured) ────────
+app.use('/uploads/avatars', express.static(path.join(process.cwd(), 'uploads', 'avatars'), {
+  setHeaders: (res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+  },
+}));
+
 // ─── Request Sanitization ─────────────────────────────────────────────────────
 app.use(mongoSanitize());
 app.use(xss());

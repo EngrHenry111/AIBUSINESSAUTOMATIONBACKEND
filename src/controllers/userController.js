@@ -1,10 +1,14 @@
 'use strict';
 
+const fs = require('fs');
 const User = require('../models/User');
 const Company = require('../models/Company');
+const { cloudinary } = require('../config/cloudinary');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const logger = require('../utils/logger');
+
+const safeJson = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -15,12 +19,39 @@ exports.getProfile = async (req, res, next) => {
 
 exports.updateProfile = async (req, res, next) => {
   try {
-    const allowed = ['name', 'preferences'];
     const updates = {};
-    allowed.forEach(field => { if (req.body[field] !== undefined) updates[field] = req.body[field]; });
-    if (req.file) updates.avatar = req.file.path;
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.preferences !== undefined) {
+      updates.preferences = typeof req.body.preferences === 'string'
+        ? safeJson(req.body.preferences)
+        : req.body.preferences;
+    }
+
+    // Avatar upload — Cloudinary when configured, local static fallback otherwise
+    if (req.file) {
+      let avatarUrl = null;
+      if (cloudinary) {
+        try {
+          const result = await cloudinary.uploader.upload(req.file.path, {
+            folder: 'business-ai/avatars',
+            resource_type: 'image',
+            transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }],
+          });
+          avatarUrl = result.secure_url;
+          fs.unlink(req.file.path, () => {});
+        } catch (e) {
+          logger.warn(`Avatar Cloudinary upload failed: ${e.message}`);
+        }
+      }
+      if (!avatarUrl) {
+        const base = (process.env.API_URL || '').replace(/\/+$/, '');
+        avatarUrl = `${base}/uploads/avatars/${req.file.filename}`;
+      }
+      updates.avatar = avatarUrl;
+    }
 
     const user = await User.findByIdAndUpdate(req.user._id, updates, { new: true, runValidators: true });
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.profile_update', ip: req.ip });
     res.status(200).json({ success: true, data: user });
   } catch (err) { next(err); }
 };
