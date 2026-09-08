@@ -41,6 +41,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const portalRoutes = require('./routes/portalRoutes');
 const twoFactorRoutes = require('./routes/twoFactorRoutes');
+const auditRoutes = require('./routes/auditRoutes');
 
 
 const app = express();
@@ -180,6 +181,7 @@ app.use(`${API}/messages`, messageRoutes);
 app.use(`${API}/search`, searchRoutes);
 app.use(`${API}/notifications`, notificationRoutes);
 app.use(`${API}/portal`, portalRoutes);
+app.use(`${API}/audit-logs`, auditRoutes);
 
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
