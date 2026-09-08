@@ -9,6 +9,7 @@ const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Customer = require('../models/Customer');
+const Expense = require('../models/Expense');
 const Appointment = require('../models/Appointment');
 const AuditLog = require('../models/AuditLog');
 const { generateStructured } = require('../services/groqService');
@@ -41,6 +42,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       recentActivity,
       productAgg,
       totalCustomers, customersThisMonth,
+      expenseAgg, paidRevenueAgg,
     ] = await Promise.all([
       Company.findById(companyId).select('usage limits subscription'),
       Document.countDocuments({ companyId, status: 'ready' }),
@@ -74,6 +76,14 @@ exports.getDashboardMetrics = async (req, res, next) => {
       ]),
       Customer.countDocuments({ companyId }),
       Customer.countDocuments({ companyId, createdAt: { $gte: startOfMonth } }),
+      Expense.aggregate([
+        { $match: { companyId, status: { $ne: 'rejected' }, date: { $gte: startOfMonth } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Invoice.aggregate([
+        { $match: { companyId, status: 'paid', paidAt: { $gte: startOfMonth } } },
+        { $group: { _id: null, total: { $sum: '$total' } } },
+      ]),
     ]);
 
     // Lead pipeline stats
@@ -137,6 +147,11 @@ exports.getDashboardMetrics = async (req, res, next) => {
         customers: {
           total: totalCustomers,
           newThisMonth: customersThisMonth,
+        },
+        finance: {
+          expensesThisMonth: expenseAgg[0]?.total || 0,
+          revenueThisMonth: paidRevenueAgg[0]?.total || 0,
+          netProfitThisMonth: (paidRevenueAgg[0]?.total || 0) - (expenseAgg[0]?.total || 0),
         },
         ai: {
           avgConfidence: aiMetrics[0]?.avgConfidence ? Math.round(aiMetrics[0].avgConfidence) : 0,
