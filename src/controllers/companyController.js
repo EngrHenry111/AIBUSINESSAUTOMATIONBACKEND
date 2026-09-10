@@ -52,16 +52,10 @@ exports.getStoreSettings = async (req, res, next) => {
     const company = await Company.findById(req.companyId);
     if (!company) return next(new AppError('Company not found.', 404));
 
-    // Backfill a slug for companies created before the storefront existed
+    // Backfill a slug for companies created before the storefront existed.
+    // Only assign when it's still empty — never touch an existing store slug.
     if (!company.storeSlug) {
-      let base = Company.slugify(company.companyName) || `store-${Date.now().toString(36)}`;
-      let candidate = base;
-      let n = 1;
-      // eslint-disable-next-line no-await-in-loop
-      while (await Company.exists({ storeSlug: candidate, _id: { $ne: company._id } })) {
-        candidate = `${base}-${n++}`;
-      }
-      company.storeSlug = candidate;
+      company.storeSlug = await Company.generateStoreSlug(company.companyName, company._id);
       await company.save();
     }
 
