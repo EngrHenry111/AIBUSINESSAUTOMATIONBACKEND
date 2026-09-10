@@ -47,23 +47,55 @@ const companySchema = new mongoose.Schema({
     maxQuestionsPerMonth: { type: Number, default: 500 },
   },
   status: { type: String, enum: ['active', 'suspended', 'deleted'], default: 'active' },
+
+  // ── Paystack subaccount (storefront payouts, BizlyAI keeps a commission) ──
+  paymentSettings: {
+    paystackSubaccountCode: String, // ACCT_xxxxxxxx
+    paystackSubaccountId: String,
+    bankName: String,
+    bankCode: String,
+    accountNumber: String,
+    accountName: String, // auto-verified by Paystack
+    isPaymentSetup: { type: Boolean, default: false },
+    commissionPercent: { type: Number, default: 3 },
+    settlementSchedule: { type: String, default: 'auto' },
+  },
+
+  // ── Public customer storefront ──────────────────────────────────────────
+  storeSlug: { type: String, lowercase: true, trim: true },
+  storeEnabled: { type: Boolean, default: false },
+  storeSettings: {
+    banner: String, // Cloudinary URL
+    description: String,
+    announcement: String,
+    primaryColor: { type: String, default: '#6366f1' },
+    showOutOfStock: { type: Boolean, default: true },
+    allowBackorders: { type: Boolean, default: false },
+  },
 }, { timestamps: true });
 
 companySchema.index({ slug: 1 });
+companySchema.index({ storeSlug: 1 }, { unique: true, sparse: true });
 companySchema.index({ owner: 1 });
 companySchema.index({ 'subscription.status': 1 });
 
-// Auto-generate slug from company name
+const slugify = (s) => String(s || '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
+
+// Auto-generate slugs from company name
 companySchema.pre('save', function (next) {
   if (this.isModified('companyName') && !this.slug) {
-    this.slug = this.companyName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      + '-' + Date.now().toString(36);
+    this.slug = `${slugify(this.companyName)}-${Date.now().toString(36)}`;
+  }
+  if (!this.storeSlug && this.companyName) {
+    this.storeSlug = slugify(this.companyName) || `store-${Date.now().toString(36)}`;
   }
   next();
 });
+
+companySchema.statics.slugify = slugify;
 
 module.exports = mongoose.model('Company', companySchema);
 

@@ -5,7 +5,9 @@ const mongoose = require('mongoose');
 const orderSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   orderNumber: { type: String, required: true },
-  customer: { name: String, email: String, phone: String },
+  customer: { name: String, email: String, phone: String, address: String },
+  source: { type: String, enum: ['manual', 'storefront'], default: 'manual' },
+  paystackReference: { type: String },
   items: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
     name: String,
@@ -40,5 +42,7 @@ const orderSchema = new mongoose.Schema({
 orderSchema.index({ companyId: 1, status: 1 });
 orderSchema.index({ companyId: 1, orderNumber: 1 }, { unique: true });
 orderSchema.index({ companyId: 1, 'customer.email': 1 });
+orderSchema.index({ paystackReference: 1 }, { unique: true, sparse: true });
+orderSchema.index({ companyId: 1, source: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

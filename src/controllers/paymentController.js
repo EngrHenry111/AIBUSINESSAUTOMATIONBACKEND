@@ -370,7 +370,17 @@ exports.webhook = async (req, res) => {
       // First charge for a plan-based transaction, or any one-off charge
       case 'charge.success': {
         const { metadata, amount, reference } = data;
-        if (metadata?.companyId && metadata?.plan) {
+        if (metadata?.type === 'storefront_order' && metadata?.companyId) {
+          try {
+            const company = await Company.findById(metadata.companyId);
+            if (company) {
+              const { fulfilStorefrontOrder } = require('./storefrontController');
+              await fulfilStorefrontOrder(company, data, { io: req.app.get('io') });
+            }
+          } catch (e) {
+            logger.error(`Storefront webhook fulfilment failed for ${reference}: ${e.message}`);
+          }
+        } else if (metadata?.companyId && metadata?.plan) {
           await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100);
         }
         break;

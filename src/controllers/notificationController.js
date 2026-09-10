@@ -31,7 +31,7 @@ exports.getNotifications = async (req, res, next) => {
       Lead.find({ companyId, createdAt: { $gte: new Date(now - 24 * 60 * 60 * 1000) } })
         .select('name company createdAt').limit(5),
       Order.find({ companyId, status: { $in: ['pending', 'confirmed'] }, createdAt: { $gte: new Date(now - 48 * 60 * 60 * 1000) } })
-        .select('orderNumber customer status').limit(5),
+        .select('orderNumber customer status source total currency').limit(8),
       Message.countDocuments({ companyId, recipientId: userId, isRead: false }),
       Product.find({
         companyId, status: { $ne: 'inactive' }, 'stock.trackStock': true,
@@ -58,7 +58,12 @@ exports.getNotifications = async (req, res, next) => {
         message: `${lead.name}${lead.company ? ` from ${lead.company}` : ''} was added`,
         url: '/leads', time: lead.createdAt,
       })),
-      ...pendingOrders.map(order => ({
+      ...pendingOrders.map(order => (order.source === 'storefront' ? {
+        id: `order-${order._id}`, type: 'success',
+        title: 'New Store Order',
+        message: `${order.customer?.name || 'A customer'} ordered ${order.currency === 'NGN' ? '₦' : ''}${Number(order.total || 0).toLocaleString()} (${order.orderNumber})`,
+        url: '/orders', time: order.createdAt,
+      } : {
         id: `order-${order._id}`, type: 'info',
         title: 'Order Pending',
         message: `Order ${order.orderNumber} from ${order.customer?.name} needs attention`,
