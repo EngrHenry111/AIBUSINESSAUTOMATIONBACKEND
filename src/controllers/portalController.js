@@ -115,7 +115,7 @@ exports.getPortalData = async (req, res, next) => {
     const { email, companyId } = readPortalJwt(req);
 
     const [company, invoices, orders, appointments] = await Promise.all([
-      Company.findById(companyId).select('companyName').lean(),
+      Company.findById(companyId).select('companyName logo website profile paymentSettings').lean(),
       Invoice.find({ companyId, 'customer.email': email }).sort({ createdAt: -1 }).lean(),
       Order.find({ companyId, 'customer.email': email }).sort({ createdAt: -1 }).lean(),
       Appointment.find({ companyId, 'customer.email': email }).sort({ scheduledAt: -1 }).lean(),
@@ -125,7 +125,23 @@ exports.getPortalData = async (req, res, next) => {
       success: true,
       data: {
         email,
-        company: company?.companyName || 'Your provider',
+        // Business identity + manual-payment bank details for this portal.
+        company: {
+          name: company?.companyName || 'Your provider',
+          logo: company?.logo || null,
+          website: company?.website || null,
+          tagline: company?.profile?.tagline || null,
+          contact: {
+            email: company?.profile?.email || null,
+            phone: company?.profile?.phone || null,
+            address: company?.profile?.address || null,
+          },
+          bankDetails: company?.paymentSettings?.isPaymentSetup ? {
+            bankName: company.paymentSettings.bankName,
+            accountName: company.paymentSettings.accountName,
+            accountNumber: company.paymentSettings.accountNumber,
+          } : null,
+        },
         invoices: invoices.map((i) => ({
           _id: i._id,
           invoiceNumber: i.invoiceNumber,

@@ -8,7 +8,7 @@ const ctrl = require('../controllers/companyController');
 const router = express.Router();
 router.use(protect, enforceTenant);
 router.get('/', ctrl.getCompany);
-router.patch('/', isManager, ctrl.updateCompany);
+router.patch('/', isManager, uploadProductImage.single('logo'), ctrl.updateCompany);
 router.get('/usage', ctrl.getUsage);
 router.patch('/ai-settings', isManager, ctrl.updateAISettings);
 

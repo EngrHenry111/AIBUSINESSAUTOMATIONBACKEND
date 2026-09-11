@@ -81,11 +81,19 @@ exports.getStore = async (req, res, next) => {
           acceptsPayments: Boolean(company.paymentSettings?.isPaymentSetup),
           settings: {
             banner: company.storeSettings?.banner || null,
-            description: company.storeSettings?.description || null,
+            description: company.storeSettings?.description || company.profile?.tagline || null,
             announcement: company.storeSettings?.announcement || null,
             primaryColor: company.storeSettings?.primaryColor || '#6366f1',
             showOutOfStock: company.storeSettings?.showOutOfStock !== false,
             allowBackorders: Boolean(company.storeSettings?.allowBackorders),
+          },
+          // Public contact details only — never bank details on the storefront.
+          contact: {
+            email: company.profile?.email || null,
+            phone: company.profile?.phone || null,
+            address: company.profile?.address || null,
+            website: company.website || null,
+            socials: company.profile?.socials || null,
           },
         },
         products: products.map(publicProduct),

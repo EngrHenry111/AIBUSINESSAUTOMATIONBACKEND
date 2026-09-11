@@ -16,6 +16,16 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
 const money = (n, cur) => `${cur || 'USD'} ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const day = (d) => (d ? new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—');
 
+// Fields needed anywhere a company's own branding/payment details show up
+// on customer-facing output (invoice PDF, invoice/receipt emails, AI drafts).
+const COMPANY_BRANDING_FIELDS = 'companyName logo website profile paymentSettings';
+
+function bankDetailsBlock(company) {
+  const ps = company?.paymentSettings;
+  if (!ps?.isPaymentSetup) return null;
+  return { bankName: ps.bankName, accountName: ps.accountName, accountNumber: ps.accountNumber };
+}
+
 exports.getInvoices = async (req, res, next) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
@@ -85,6 +95,9 @@ exports.draftReminder = async (req, res, next) => {
     const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!invoice) return next(new AppError('Invoice not found.', 404));
 
+    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+    const bank = bankDetailsBlock(company);
+
     const daysOverdue = Math.floor((Date.now() - new Date(invoice.dueAt)) / (1000 * 60 * 60 * 24));
     const tone = daysOverdue <= 0 ? 'friendly reminder' : daysOverdue <= 14 ? 'firm but professional' : 'urgent and escalated';
 
@@ -97,6 +110,14 @@ Invoice Details:
 - Due Date: ${new Date(invoice.dueAt).toDateString()}
 - Days Overdue: ${daysOverdue > 0 ? daysOverdue : 'Not yet due'}
 - Status: ${invoice.status}
+- Sent from: ${company?.companyName || 'our business'}
+${bank ? `
+The business bank details are:
+Bank: ${bank.bankName}
+Account Name: ${bank.accountName}
+Account Number: ${bank.accountNumber}
+
+Include these payment details naturally in the reminder message so the customer knows exactly where to send payment. Reference the invoice number as the payment reference.` : ''}
 
 Tone: ${tone}
 Write a complete, professional email with subject line and body.`;
@@ -141,7 +162,9 @@ exports.generatePDF = async (req, res, next) => {
     });
     if (!invoice) return next(new AppError('Invoice not found', 404));
 
-    const company = await require('../models/Company').findById(req.companyId);
+    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+    const profile = company?.profile || {};
+    const bank = bankDetailsBlock(company);
 
     // Generate HTML invoice
     const html = `<!DOCTYPE html>
@@ -151,9 +174,12 @@ exports.generatePDF = async (req, res, next) => {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Arial, sans-serif; color: #1e293b; padding: 40px; }
-  .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
-  .brand { font-size: 24px; font-weight: 800; color: #6366f1; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; gap: 20px; }
+  .brand-row { display: flex; align-items: center; gap: 12px; }
+  .brand-logo { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; }
+  .brand { font-size: 22px; font-weight: 800; color: #6366f1; }
   .brand-sub { font-size: 12px; color: #64748b; margin-top: 4px; }
+  .brand-contact { font-size: 12px; color: #64748b; margin-top: 10px; line-height: 1.6; }
   .invoice-title { font-size: 32px; font-weight: 700; color: #6366f1; text-align: right; }
   .invoice-num { font-size: 14px; color: #64748b; text-align: right; margin-top: 4px; }
   .info-section { display: flex; justify-content: space-between; margin-bottom: 32px; }
@@ -171,14 +197,29 @@ exports.generatePDF = async (req, res, next) => {
   .total-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; color: #475569; border-bottom: 1px solid #f1f5f9; }
   .total-final { display: flex; justify-content: space-between; padding: 12px 0; font-size: 18px; font-weight: 700; color: #6366f1; border-top: 2px solid #6366f1; margin-top: 4px; }
   .notes { margin-top: 32px; padding: 16px; background: #f8fafc; border-radius: 8px; font-size: 13px; color: #475569; }
+  .payment-box { margin-top: 24px; padding: 16px 20px; background: #f0f4ff; border: 1px solid #dbe3ff; border-radius: 8px; }
+  .payment-box h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #4f46e5; margin-bottom: 8px; }
+  .payment-box p { font-size: 14px; color: #334155; line-height: 1.7; }
   .footer { margin-top: 48px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 16px; }
+  .footer .tagline { font-style: italic; margin-top: 4px; }
 </style>
 </head>
 <body>
 <div class="header">
   <div>
-    <div class="brand">EngrHenryTech BusinessAI</div>
-    <div class="brand-sub">${company?.companyName || ''}</div>
+    <div class="brand-row">
+      ${company?.logo ? `<img class="brand-logo" src="${company.logo}" alt="${esc(company.companyName)}"/>` : ''}
+      <div>
+        <div class="brand">${esc(company?.companyName || 'BizlyAI')}</div>
+        ${profile.tagline ? `<div class="brand-sub">${esc(profile.tagline)}</div>` : ''}
+      </div>
+    </div>
+    <div class="brand-contact">
+      ${profile.address ? `${esc(profile.address)}<br/>` : ''}
+      ${[profile.phone, profile.email].filter(Boolean).map(esc).join(' · ')}
+      ${(profile.rcNumber || profile.tin) ? `<br/>${profile.rcNumber ? `RC: ${esc(profile.rcNumber)}` : ''}${profile.rcNumber && profile.tin ? ' · ' : ''}${profile.tin ? `TIN: ${esc(profile.tin)}` : ''}` : ''}
+      ${company?.website ? `<br/>${esc(company.website)}` : ''}
+    </div>
   </div>
   <div>
     <div class="invoice-title">INVOICE</div>
@@ -230,8 +271,21 @@ exports.generatePDF = async (req, res, next) => {
 
 ${invoice.notes ? `<div class="notes"><strong>Notes:</strong> ${invoice.notes}</div>` : ''}
 
+${bank ? `
+<div class="payment-box">
+  <h4>Payment Instructions</h4>
+  <p>
+    Bank Name: <strong>${esc(bank.bankName || '—')}</strong><br/>
+    Account Name: <strong>${esc(bank.accountName || '—')}</strong><br/>
+    Account Number: <strong>${esc(bank.accountNumber || '—')}</strong><br/>
+    Reference: <strong>${esc(invoice.invoiceNumber)}</strong>
+  </p>
+</div>` : ''}
+
 <div class="footer">
-  Generated by EngrHenryTech BusinessAI · ${new Date().toLocaleDateString()}
+  Thank you for your business${company?.companyName ? ` — ${esc(company.companyName)}` : ''}.
+  ${profile.tagline ? `<div class="tagline">${esc(profile.tagline)}</div>` : ''}
+  <div style="margin-top:8px">Generated by BizlyAI · ${new Date().toLocaleDateString()}</div>
 </div>
 </body>
 </html>`;
@@ -245,6 +299,8 @@ ${invoice.notes ? `<div class="notes"><strong>Notes:</strong> ${invoice.notes}</
 // ── Email HTML builders ─────────────────────────────────────────────────
 function invoiceEmailHtml(invoice, company) {
   const cur = invoice.currency || 'USD';
+  const profile = company?.profile || {};
+  const bank = bankDetailsBlock(company);
   const portalUrl = `${clientUrl()}/portal/login?company=${invoice.companyId}`;
   const rows = (invoice.items || []).map((it) => `
     <tr>
@@ -290,9 +346,24 @@ function invoiceEmailHtml(invoice, company) {
 
     ${invoice.notes ? `<p style="font-size:13px;color:#475569;background:#f8fafc;border-radius:8px;padding:12px;">${esc(invoice.notes)}</p>` : ''}
 
+    ${bank ? `
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f4ff;border:1px solid #dbe3ff;border-radius:10px;margin:0 0 20px;">
+      <tr><td style="padding:16px 20px;">
+        <p style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#4f46e5;font-weight:700;margin:0 0 8px;">Payment Instructions</p>
+        <p style="font-size:14px;color:#334155;line-height:1.7;margin:0;">
+          Bank Name: <strong>${esc(bank.bankName || '—')}</strong><br/>
+          Account Name: <strong>${esc(bank.accountName || '—')}</strong><br/>
+          Account Number: <strong>${esc(bank.accountNumber || '—')}</strong><br/>
+          Reference: <strong>${esc(invoice.invoiceNumber)}</strong>
+        </p>
+      </td></tr>
+    </table>` : ''}
+
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
     <p style="color:#94a3b8;font-size:12px;margin:0;">
-      ${esc(company?.companyName || 'BizlyAI')}${company?.website ? ` · <a href="${esc(company.website)}" style="color:#6366f1;">${esc(company.website)}</a>` : ''}<br/>
+      ${esc(company?.companyName || 'BizlyAI')}${company?.website ? ` · <a href="${esc(company.website)}" style="color:#6366f1;">${esc(company.website)}</a>` : ''}
+      ${[profile.phone, profile.email].filter(Boolean).length ? `<br/>${[profile.phone, profile.email].filter(Boolean).map(esc).join(' · ')}` : ''}
+      ${profile.address ? `<br/>${esc(profile.address)}` : ''}<br/>
       Questions about this invoice? Just reply to this email.
     </p>`;
 }
@@ -334,8 +405,12 @@ exports.sendInvoiceEmail = async (req, res, next) => {
       return next(new AppError('This invoice has no customer email address.', 400));
     }
 
-    const company = await Company.findById(req.companyId).select('companyName website');
-    const html = emailService.baseTemplate(`Invoice ${invoice.invoiceNumber}`, invoiceEmailHtml(invoice, company));
+    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+    const html = emailService.baseTemplate(
+      `Invoice ${invoice.invoiceNumber}`,
+      invoiceEmailHtml(invoice, company),
+      { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
+    );
 
     await emailService.send({
       to: invoice.customer.email,
@@ -368,8 +443,12 @@ exports.sendPaymentReceipt = async (req, res, next) => {
       return next(new AppError('This invoice has no customer email address.', 400));
     }
 
-    const company = await Company.findById(req.companyId).select('companyName website');
-    const html = emailService.baseTemplate('Payment Received', receiptEmailHtml(invoice, company));
+    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+    const html = emailService.baseTemplate(
+      'Payment Received',
+      receiptEmailHtml(invoice, company),
+      { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
+    );
 
     await emailService.send({
       to: invoice.customer.email,

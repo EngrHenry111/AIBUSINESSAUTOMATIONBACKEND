@@ -24,7 +24,27 @@ const FROM = process.env.EMAIL_FROM || 'BizlyAI <onboarding@resend.dev>';
 const BASE_URL = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5174';
 
 // ── Base HTML wrapper ─────────────────────────────────────────────────────
-function baseTemplate(title, content) {
+// `brand` lets a company-facing email (invoices, receipts) show that
+// company's own logo/name in the header instead of the generic BizlyAI
+// banner. Omit it (or pass nothing) and every other email is unaffected.
+function baseTemplate(title, content, brand) {
+  const headerInner = brand?.name
+    ? `
+            ${brand.logo ? `<img src="${brand.logo}" alt="${brand.name}" style="max-height:44px;max-width:200px;object-fit:contain;margin-bottom:10px;"/><br/>` : ''}
+            <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.5px;">
+              ${brand.name}
+            </h1>
+            <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:13px;">
+              ${brand.tagline || 'Powered by BizlyAI'}
+            </p>`
+    : `
+            <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
+              ⚡ EngrHenryTech BusinessAI
+            </h1>
+            <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:14px;">
+              Powered by AI · Built for Business
+            </p>`;
+
   return `
 <!DOCTYPE html>
 <html>
@@ -39,13 +59,7 @@ function baseTemplate(title, content) {
       <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
         <!-- Header -->
         <tr>
-          <td style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:32px 40px;text-align:center;">
-            <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
-              ⚡ EngrHenryTech BusinessAI
-            </h1>
-            <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:14px;">
-              Powered by AI · Built for Business
-            </p>
+          <td style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:32px 40px;text-align:center;">${headerInner}
           </td>
         </tr>
         <!-- Body -->

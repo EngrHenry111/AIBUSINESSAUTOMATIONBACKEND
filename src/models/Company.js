@@ -9,6 +9,25 @@ const companySchema = new mongoose.Schema({
   website: { type: String, trim: true },
   logo: { type: String },
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+
+  // ── Business profile — feeds invoices, AI reminders, the storefront and
+  // the customer portal, so it's kept separate from the owner's own contact
+  // details (settings.timezone/currency etc. stay app-level preferences).
+  profile: {
+    tagline: { type: String, trim: true, maxlength: 200 },
+    email: { type: String, trim: true, lowercase: true },     // shown on invoices, distinct from the owner's login email
+    phone: { type: String, trim: true },
+    address: { type: String, trim: true, maxlength: 400 },
+    rcNumber: { type: String, trim: true },                    // business registration number
+    tin: { type: String, trim: true },                         // tax identification number
+    socials: {
+      twitter: { type: String, trim: true },
+      facebook: { type: String, trim: true },
+      instagram: { type: String, trim: true },
+      linkedin: { type: String, trim: true },
+      whatsapp: { type: String, trim: true },
+    },
+  },
   subscription: {
     plan: { type: String, enum: ['trial', 'starter', 'professional', 'business', 'enterprise'], default: 'trial' },
     status: { type: String, enum: ['active', 'inactive', 'past_due', 'cancelled', 'expired'], default: 'active' },

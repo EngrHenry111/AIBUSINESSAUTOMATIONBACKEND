@@ -18,14 +18,51 @@ exports.getCompany = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// Fields nested under `profile` that a client may update — merged in,
+// never replacing the whole subdocument, so a partial PATCH can't wipe
+// fields it didn't send.
+const PROFILE_FIELDS = ['tagline', 'email', 'phone', 'address', 'rcNumber', 'tin'];
+const SOCIAL_FIELDS = ['twitter', 'facebook', 'instagram', 'linkedin', 'whatsapp'];
+
 exports.updateCompany = async (req, res, next) => {
   try {
-    const allowed = ['companyName', 'industry', 'website', 'settings'];
-    const updates = {};
-    allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
-    if (req.file) updates.logo = req.file.path;
+    const company = await Company.findById(req.companyId);
+    if (!company) return next(new AppError('Company not found.', 404));
 
-    const company = await Company.findByIdAndUpdate(req.companyId, updates, { new: true, runValidators: true });
+    const allowed = ['companyName', 'industry', 'website', 'settings'];
+    allowed.forEach((f) => { if (req.body[f] !== undefined) company[f] = req.body[f]; });
+
+    // `profile` may arrive as a JSON string (multipart form) or an object
+    let profileInput = req.body.profile;
+    if (typeof profileInput === 'string') {
+      try { profileInput = JSON.parse(profileInput); } catch { profileInput = undefined; }
+    }
+    if (profileInput && typeof profileInput === 'object') {
+      if (!company.profile) company.profile = {};
+      PROFILE_FIELDS.forEach((f) => { if (profileInput[f] !== undefined) company.profile[f] = profileInput[f]; });
+      if (profileInput.socials && typeof profileInput.socials === 'object') {
+        if (!company.profile.socials) company.profile.socials = {};
+        SOCIAL_FIELDS.forEach((f) => { if (profileInput.socials[f] !== undefined) company.profile.socials[f] = profileInput.socials[f]; });
+      }
+    }
+
+    // Logo upload (multipart, field name "logo") → Cloudinary, matching how
+    // product images / the store banner are handled elsewhere.
+    if (req.file) {
+      if (cloudinary) {
+        const r = await cloudinary.uploader.upload(req.file.path, {
+          folder: `business-ai/${req.companyId}/branding`,
+          resource_type: 'image',
+          transformation: [{ width: 500, height: 500, crop: 'limit' }],
+        });
+        fs.unlink(req.file.path, () => {});
+        company.logo = r.secure_url;
+      } else {
+        company.logo = `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${req.file.path.split(/[\\/]/).pop()}`;
+      }
+    }
+
+    await company.save();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'company.update', ip: req.ip });
     res.status(200).json({ success: true, data: company });
   } catch (err) { next(err); }
