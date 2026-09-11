@@ -2,6 +2,7 @@
 
 const Meeting = require('../models/Meeting');
 const { generateStructured } = require('../services/groqService');
+const { cleanAIText, cleanAIObject } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 
@@ -83,11 +84,11 @@ Extract a comprehensive meeting analysis.`;
     meeting.transcript = content;
     meeting.status = 'completed';
     meeting.ai = {
-      summary: analysis.summary,
-      keyDecisions: analysis.keyDecisions || [],
-      actionItems: analysis.actionItems || [],
-      risks: analysis.risks || [],
-      followUps: analysis.followUps || [],
+      summary: cleanAIText(analysis.summary),
+      keyDecisions: cleanAIObject(analysis.keyDecisions || []),
+      actionItems: cleanAIObject(analysis.actionItems || []),
+      risks: cleanAIObject(analysis.risks || []),
+      followUps: cleanAIObject(analysis.followUps || []),
       sentiment: analysis.sentiment,
       processedAt: new Date(),
     };

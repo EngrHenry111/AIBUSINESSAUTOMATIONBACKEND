@@ -2,6 +2,7 @@
 
 const Appointment = require('../models/Appointment');
 const { runAgent } = require('../services/groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 const videoCall = require('../services/videoCallService');
 const { AppError } = require('../middleware/errorMiddleware');
 
@@ -30,9 +31,9 @@ exports.createAppointment = async (req, res, next) => {
 
     // Auto-generate confirmation draft
     try {
-      const confirmDraft = await runAgent('knowledge_assistant',
+      const confirmDraft = cleanAIText(await runAgent('knowledge_assistant',
         `Write a brief, professional appointment confirmation email for: ${appointment.customer?.name || 'Customer'}, scheduled for ${new Date(appointment.scheduledAt).toLocaleString()}, service: ${appointment.title}.`
-      );
+      ));
       appointment.ai = { confirmationDraft: confirmDraft };
       await appointment.save();
     } catch { /* Non-blocking */ }

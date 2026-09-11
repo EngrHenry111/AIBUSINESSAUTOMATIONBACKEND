@@ -1,6 +1,7 @@
 'use strict';
 
 const { generateStructured, runAgent } = require('../services/groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 
 exports.generateContentPlan = async (req, res, next) => {
@@ -41,7 +42,7 @@ Platform character limits: Twitter=280, LinkedIn=3000, Instagram=2200
 
 Write 3 variations from different angles (educational, promotional, engaging question).`;
 
-    const content = await runAgent('social_agent', prompt);
+    const content = cleanAIText(await runAgent('social_agent', prompt));
     res.status(200).json({ success: true, data: { platform, topic, content } });
   } catch (err) { next(err); }
 };
@@ -68,7 +69,7 @@ Target audience: ${targetAudience || 'business professionals'}
 
 Provide 3 distinct campaign concepts with strategy, tactics, content themes, and KPIs.`;
 
-    const campaign = await runAgent('social_agent', prompt);
+    const campaign = cleanAIText(await runAgent('social_agent', prompt));
     res.status(200).json({ success: true, data: { campaign } });
   } catch (err) { next(err); }
 };

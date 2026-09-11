@@ -6,6 +6,7 @@ const { generateStructured, runAgent } = require('../services/groqService');
 const emailService = require('../services/emailService');
 const { AppError } = require('../middleware/errorMiddleware');
 const { recordCustomerTransaction } = require('../utils/customerSync');
+const { cleanAIText } = require('../utils/cleanAIText');
 const logger = require('../utils/logger');
 
 const clientUrl = () =>
@@ -100,7 +101,7 @@ Invoice Details:
 Tone: ${tone}
 Write a complete, professional email with subject line and body.`;
 
-    const draft = await runAgent('invoice_agent', prompt);
+    const draft = cleanAIText(await runAgent('invoice_agent', prompt));
 
     invoice.ai = { ...invoice.ai, reminderDraft: draft };
     await invoice.save();

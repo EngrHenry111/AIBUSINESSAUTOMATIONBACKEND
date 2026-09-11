@@ -1,7 +1,13 @@
 'use strict';
 
 const { getGroqClient, MODELS } = require('../config/groq');
+const { cleanAIText, cleanAIObject } = require('../utils/cleanAIText');
 const logger = require('../utils/logger');
+
+// Appended to every system prompt so AI output can be pasted straight into
+// WhatsApp or an email without stray markdown. cleanAIText() below is the
+// belt-and-braces backstop for whenever a model ignores this anyway.
+const PLAIN_TEXT_RULE = `IMPORTANT: Return plain text only. Do NOT use markdown formatting. Do NOT use asterisks (* or **) for bold. Do NOT use hashtags (#) for headings. Do NOT use underscores (_) for italics. Write in clean plain text that can be copied directly into WhatsApp or email.`;
 
 const AGENT_PROMPTS = {
   knowledge_assistant: `You are an intelligent knowledge base assistant for a business.
@@ -82,6 +88,12 @@ Provide:
 Base all analysis on the provided data only.`,
 };
 
+// Every agent gets the plain-text rule appended, once, here — not copy-pasted
+// into each prompt above.
+Object.keys(AGENT_PROMPTS).forEach((key) => {
+  AGENT_PROMPTS[key] = `${AGENT_PROMPTS[key]}\n\n${PLAIN_TEXT_RULE}`;
+});
+
 /**
  * Core completion function
  */
@@ -117,7 +129,7 @@ async function generateAnswer(context, question, conversationHistory = []) {
   ];
 
   const response = await complete({ messages, model: MODELS.SMART, maxTokens: 1000 });
-  return response.choices[0].message.content;
+  return cleanAIText(response.choices[0].message.content);
 }
 
 /**
@@ -129,7 +141,9 @@ Rules:
 1. Answer using ONLY the provided knowledge base context.
 2. If the answer is not in the context, briefly say you'll connect them with a team member — do not guess.
 3. Keep replies short and conversational: 1-3 sentences, WhatsApp style. No markdown, no headings, no bullet characters.
-4. Be warm, human and professional. Never mention "context" or "documents".`;
+4. Be warm, human and professional. Never mention "context" or "documents".
+
+${PLAIN_TEXT_RULE}`;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -138,7 +152,7 @@ Rules:
   ];
 
   const response = await complete({ messages, model: MODELS.SMART, maxTokens: 400, temperature: 0.3 });
-  return response.choices[0].message.content.trim();
+  return cleanAIText(response.choices[0].message.content);
 }
 
 /**
@@ -154,11 +168,15 @@ async function runAgent(agentType, input, options = {}) {
   ];
 
   const response = await complete({ messages, model, maxTokens: options.maxTokens || 1200, temperature: options.temperature || 0.3 });
-  return response.choices[0].message.content;
+  return cleanAIText(response.choices[0].message.content);
 }
 
 /**
- * Streaming response for real-time chat
+ * Streaming response for real-time chat. Chunks are yielded as raw tokens —
+ * they can't be run through cleanAIText() individually (a "**" could land
+ * split across two chunks) — so this relies on the knowledge_assistant
+ * system prompt's plain-text rule instead. The non-streaming generateAnswer()
+ * above still gets the full cleanAIText() pass.
  */
 async function* streamAnswer(context, question, conversationHistory = []) {
   const messages = [
@@ -178,6 +196,8 @@ async function* streamAnswer(context, question, conversationHistory = []) {
  * Structured JSON output from AI
  */
 async function generateStructured(prompt, schema, agentType = 'knowledge_assistant') {
+  // AGENT_PROMPTS[agentType] already carries PLAIN_TEXT_RULE, which also
+  // keeps any free-text *values* inside the JSON (summaries, drafts, …) clean.
   const systemPrompt = `${AGENT_PROMPTS[agentType]}\n\nCRITICAL: Respond ONLY with valid JSON matching this schema: ${JSON.stringify(schema)}. No markdown, no backticks, no explanation.`;
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -188,10 +208,11 @@ async function generateStructured(prompt, schema, agentType = 'knowledge_assista
   const raw = response.choices[0].message.content.trim();
 
   try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    return cleanAIObject(parsed);
   } catch {
     logger.warn('Failed to parse structured AI response, returning raw:', raw.substring(0, 200));
-    return { raw };
+    return { raw: cleanAIText(raw) };
   }
 }
 

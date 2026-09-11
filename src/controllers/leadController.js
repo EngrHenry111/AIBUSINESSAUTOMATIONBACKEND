@@ -5,6 +5,7 @@ const Invoice = require('../models/Invoice');
 const Appointment = require('../models/Appointment');
 const Meeting = require('../models/Meeting');
 const { generateStructured } = require('../services/groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 
@@ -140,9 +141,9 @@ Provide analysis with lead quality score (0-100), recommended next action, urgen
 
     lead.score = analysis.score || lead.score;
     lead.ai = {
-      summary: analysis.summary,
-      recommendedAction: analysis.recommendedAction,
-      followUpDraft: analysis.followUpDraft,
+      summary: cleanAIText(analysis.summary),
+      recommendedAction: cleanAIText(analysis.recommendedAction),
+      followUpDraft: cleanAIText(analysis.followUpDraft),
       sentiment: analysis.sentiment,
       priority: analysis.priority,
       analyzedAt: new Date(),

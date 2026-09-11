@@ -3,6 +3,7 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const { runAgent } = require('../services/groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { applyStockAdjustment } = require('./productController');
 const { recordCustomerTransaction } = require('../utils/customerSync');
@@ -123,9 +124,9 @@ exports.getOrderStatus = async (req, res, next) => {
     const order = await Order.findOne({ companyId: req.companyId, orderNumber }).select('orderNumber status timeline trackingNumber carrier estimatedDelivery customer');
     if (!order) return next(new AppError('Order not found.', 404));
 
-    const statusSummary = await runAgent('knowledge_assistant',
+    const statusSummary = cleanAIText(await runAgent('knowledge_assistant',
       `Provide a friendly customer-facing status update for order ${order.orderNumber}. Current status: ${order.status}. Tracking: ${order.trackingNumber || 'Not available'}. Estimated delivery: ${order.estimatedDelivery ? new Date(order.estimatedDelivery).toDateString() : 'TBD'}.`
-    );
+    ));
 
     res.status(200).json({ success: true, data: { ...order.toJSON(), statusMessage: statusSummary } });
   } catch (err) { next(err); }

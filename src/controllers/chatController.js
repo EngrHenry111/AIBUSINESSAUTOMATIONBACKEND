@@ -7,6 +7,7 @@ const Product = require('../models/Product');
 const { getEmbedding } = require('../services/embeddingService');
 const { generateAnswer, streamAnswer } = require('../services/groqService');
 const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
+const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const logger = require('../utils/logger');
 
@@ -181,7 +182,7 @@ exports.askQuestion = async (req, res, next) => {
     }));
 
     // 6. Generate answer
-    const answer = await generateAnswer(context, question, history);
+    const answer = cleanAIText(await generateAnswer(context, question, history));
 
     // 7. Confidence score
     const confidence = Math.min(100, Math.round(topScore * 200));

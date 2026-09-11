@@ -21,6 +21,7 @@ const DocumentChunk = require('../models/DocumentChunk');
 const { getEmbedding } = require('./embeddingService');
 const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
 const { generateWhatsAppReply } = require('./groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 
 const SESSION_ROOT = path.join(process.cwd(), 'whatsapp-sessions');
 const AI_CONFIDENCE_FLOOR = 0.15;
@@ -253,7 +254,7 @@ async function handleIncomingMessage(companyId, customerPhone, customerName, mes
 
   let reply;
   try {
-    reply = await generateWhatsAppReply(context, messageText, history);
+    reply = cleanAIText(await generateWhatsAppReply(context, messageText, history));
   } catch (err) {
     logger.error('WhatsApp AI reply failed:', err.message);
     await triggerHumanHandover(convo, companyId);

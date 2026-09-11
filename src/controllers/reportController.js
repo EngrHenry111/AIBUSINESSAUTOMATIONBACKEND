@@ -6,6 +6,7 @@ const Order = require('../models/Order');
 const Chat = require('../models/Chat');
 const Document = require('../models/Document');
 const { generateStructured, runAgent } = require('../services/groqService');
+const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 
 async function gatherReportData(companyId, type, period) {
@@ -71,6 +72,8 @@ Include: executive summary, key metrics, trends, problems identified, and action
     };
 
     const report = await generateStructured(prompt, schema, 'report_agent');
+    report.executiveSummary = cleanAIText(report.executiveSummary);
+    report.conclusion = cleanAIText(report.conclusion);
 
     res.status(200).json({
       success: true,
