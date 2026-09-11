@@ -52,12 +52,23 @@ exports.getStoreSettings = async (req, res, next) => {
     const company = await Company.findById(req.companyId);
     if (!company) return next(new AppError('Company not found.', 404));
 
+    let dirty = false;
+
     // Backfill a slug for companies created before the storefront existed.
     // Only assign when it's still empty — never touch an existing store slug.
     if (!company.storeSlug) {
       company.storeSlug = await Company.generateStoreSlug(company.companyName, company._id);
-      await company.save();
+      dirty = true;
     }
+
+    // Payments are configured but the store was somehow left off (e.g. it
+    // was set up before store auto-enable existed) — self-heal on the way in.
+    if (company.paymentSettings?.isPaymentSetup && !company.storeEnabled) {
+      company.storeEnabled = true;
+      dirty = true;
+    }
+
+    if (dirty) await company.save();
 
     const s = company.storeSettings || {};
     res.status(200).json({

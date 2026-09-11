@@ -19,6 +19,10 @@ async function bootstrap() {
     // Ensure hot-path compound indexes exist (non-blocking on failure)
     require('./src/utils/ensureIndexes')().catch((e) => logger.warn(`ensureIndexes failed: ${e.message}`));
 
+    // Catch up any company that slipped through without a live store
+    // (payments configured but storeEnabled false, or a missing storeSlug)
+    require('./src/utils/migrations').migrateStoreEnabled().catch((e) => logger.warn(`migrateStoreEnabled failed: ${e.message}`));
+
     const httpServer = http.createServer(app);
 
     const io = new SocketIOServer(httpServer, {

@@ -121,13 +121,22 @@ exports.createSubaccount = async (req, res, next) => {
     company.paymentSettings.isPaymentSetup = true;
     company.paymentSettings.commissionPercent = PLATFORM_COMMISSION;
     company.paymentSettings.settlementSchedule = sub.settlement_schedule || 'auto';
+
+    // Payments are ready — put the store live automatically so the client
+    // never has to remember to flip a second switch. Make sure it has a
+    // slug to be reachable at (backfill, never reassign an existing one).
+    if (!company.storeSlug) {
+      company.storeSlug = await Company.generateStoreSlug(company.companyName, company._id);
+    }
+    company.storeEnabled = true;
+
     await company.save();
 
     await writeAuditLog({
       companyId: req.companyId, userId: req.user._id, action: 'payment.subaccount_setup',
       description: `${accountName} · ${bankName || bankCode}`, ip: req.ip,
     });
-    logger.info(`Subaccount ready for company ${req.companyId}: ${company.paymentSettings.paystackSubaccountCode}`);
+    logger.info(`Subaccount ready for company ${req.companyId}: ${company.paymentSettings.paystackSubaccountCode} — store auto-enabled`);
 
     res.status(200).json({
       success: true,
@@ -136,6 +145,8 @@ exports.createSubaccount = async (req, res, next) => {
         bankName,
         accountNumberMasked: mask(accountNumber),
         subaccountCode: company.paymentSettings.paystackSubaccountCode,
+        storeEnabled: company.storeEnabled,
+        storeSlug: company.storeSlug,
       },
     });
   } catch (err) { next(err); }

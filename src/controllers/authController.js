@@ -33,6 +33,9 @@ exports.register = async (req, res, next) => {
     if (existingUser) return next(new AppError('Email already registered.', 409));
 
     const tempUser = new User({ name, email, password, role: 'company_owner' });
+    // Company.pre('save') generates storeSlug from companyName right here and
+    // leaves storeEnabled at its schema default (false) — the store only
+    // goes live once payments are configured (see paymentSettingsController).
     const company = await Company.create({ companyName, industry, owner: tempUser._id });
     const user = await User.create({
       name, email, password, role: 'company_owner',
