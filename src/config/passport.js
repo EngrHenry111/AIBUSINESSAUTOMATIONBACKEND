@@ -44,6 +44,7 @@ async function verifyGoogleProfile(accessToken, refreshToken, profile, done) {
     const company = await Company.create({
       companyName,
       owner: tempUser._id,
+      storeEnabled: true, // store page live from day one, same as email signup
     });
 
     user = await User.create({

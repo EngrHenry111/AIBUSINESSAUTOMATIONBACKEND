@@ -98,9 +98,10 @@ exports.getStoreSettings = async (req, res, next) => {
       dirty = true;
     }
 
-    // Payments are configured but the store was somehow left off (e.g. it
-    // was set up before store auto-enable existed) — self-heal on the way in.
-    if (company.paymentSettings?.isPaymentSetup && !company.storeEnabled) {
+    // A store with a slug should be reachable from day one — payment setup
+    // only gates checkout, not the store page existing. Self-heal any
+    // company that was left disabled (e.g. registered before this existed).
+    if (!company.storeEnabled) {
       company.storeEnabled = true;
       dirty = true;
     }

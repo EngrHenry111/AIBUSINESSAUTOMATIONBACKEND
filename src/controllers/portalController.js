@@ -75,11 +75,22 @@ exports.requestAccess = async (req, res, next) => {
       expiresAt: new Date(Date.now() + LINK_TTL_MS),
     });
 
+    // process.env.CLIENT_URL (not a hardcoded localhost) — clientUrl() falls
+    // back to https://bislyai.com when it isn't set, so this is never a
+    // localhost link in production.
     const link = `${clientUrl()}/portal?token=${token}`;
+
+    logger.info(`Sending portal link to: ${email}`);
+    logger.info(`Company: ${companyId}`);
+    logger.info(`Token generated: ${token.substring(0, 8)}...`);
     logger.info(`🔗 Portal access link for ${email}: ${link}`);
-    emailService.sendPortalLink(email, company.companyName, link).catch((err) =>
-      logger.warn(`Portal link email failed for ${email}: ${err.message}`)
-    );
+
+    // Not awaited — the request responds immediately either way. The result
+    // is still logged (including the Resend message ID) so a "sent, but
+    // never arrived" report can be traced from the server logs alone.
+    emailService.sendPortalLink(email, company.companyName, link)
+      .then((result) => logger.info(`Portal email result for ${email}: messageId=${result?.messageId}`))
+      .catch((err) => logger.error(`Portal link email failed for ${email}: ${err.message} (code: ${err.code})`));
 
     res.status(200).json({ success: true, message: 'Check your email for an access link.' });
   } catch (err) { next(err); }

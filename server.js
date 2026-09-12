@@ -60,6 +60,12 @@ async function bootstrap() {
     setInterval(checkSubscriptions, 24 * 60 * 60 * 1000);
     logger.info('✅ Subscription checker scheduled (runs every 24h)');
 
+    // ── Auto-verify accounts that never clicked their verification link ───
+    const { autoVerifyOldAccounts } = require('./src/utils/accountVerification');
+    autoVerifyOldAccounts();
+    setInterval(autoVerifyOldAccounts, 24 * 60 * 60 * 1000);
+    logger.info('✅ Auto email-verification checker scheduled (runs every 24h)');
+
     // ── Meeting reminders (24h-before / 1h-before) ─────────────────────────
     const { checkMeetingReminders } = require('./src/utils/meetingReminders');
     checkMeetingReminders();

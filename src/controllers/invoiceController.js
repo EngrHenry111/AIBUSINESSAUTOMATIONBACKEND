@@ -397,6 +397,11 @@ function receiptEmailHtml(invoice, company) {
 }
 
 // ── POST /invoices/:id/send-email ───────────────────────────────────────
+// Fire-and-forget: the HTTP response never waits on the SMTP round-trip to
+// Resend, which is what was causing "Request timeout, try again" on the
+// frontend. The invoice is marked sent immediately; the actual email goes
+// out right after, and any failure is logged (not surfaced as a failed
+// request, since the user already got a success response).
 exports.sendInvoiceEmail = async (req, res, next) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
@@ -412,22 +417,24 @@ exports.sendInvoiceEmail = async (req, res, next) => {
       { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
     );
 
-    await emailService.send({
-      to: invoice.customer.email,
-      subject: `Invoice ${invoice.invoiceNumber} from ${company?.companyName || 'BizlyAI'}`,
-      html,
-    });
-
     invoice.sentAt = new Date();
     if (invoice.status === 'draft') invoice.status = 'sent';
     invoice.reminders.push({ sentAt: new Date(), method: 'email', aiGenerated: false, messagePreview: 'Invoice sent to customer' });
     await invoice.save();
 
-    logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`);
+    // Not awaited on purpose — see comment above.
+    emailService.send({
+      to: invoice.customer.email,
+      subject: `Invoice ${invoice.invoiceNumber} from ${company?.companyName || 'BizlyAI'}`,
+      html,
+    })
+      .then(() => logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`))
+      .catch((err) => logger.error(`Invoice email failed for ${invoice.invoiceNumber}: ${err.message}`));
+
     res.status(200).json({ success: true, message: `Invoice sent to ${invoice.customer.email}`, data: invoice });
   } catch (err) {
     logger.error(`sendInvoiceEmail failed: ${err.message}`);
-    next(new AppError('Could not send the invoice email. Check the email service is configured.', 502));
+    next(new AppError('Could not queue the invoice email. Please try again.', 502));
   }
 };
 
@@ -450,19 +457,21 @@ exports.sendPaymentReceipt = async (req, res, next) => {
       { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
     );
 
-    await emailService.send({
-      to: invoice.customer.email,
-      subject: `Payment received — Invoice ${invoice.invoiceNumber}`,
-      html,
-    });
-
     invoice.receiptSentAt = new Date();
     await invoice.save();
 
-    logger.info(`Receipt for ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`);
+    // Not awaited — see sendInvoiceEmail above for why.
+    emailService.send({
+      to: invoice.customer.email,
+      subject: `Payment received — Invoice ${invoice.invoiceNumber}`,
+      html,
+    })
+      .then(() => logger.info(`Receipt for ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`))
+      .catch((err) => logger.error(`Receipt email failed for ${invoice.invoiceNumber}: ${err.message}`));
+
     res.status(200).json({ success: true, message: `Receipt sent to ${invoice.customer.email}`, data: invoice });
   } catch (err) {
     logger.error(`sendPaymentReceipt failed: ${err.message}`);
-    next(new AppError('Could not send the receipt email.', 502));
+    next(new AppError('Could not queue the receipt email. Please try again.', 502));
   }
 };

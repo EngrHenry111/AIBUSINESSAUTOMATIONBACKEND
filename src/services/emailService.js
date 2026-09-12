@@ -15,6 +15,12 @@ function getTransporter() {
         user: 'resend',
         pass: process.env.RESEND_API_KEY,
       },
+      // Nodemailer's defaults (2min connect / 10min socket) are long enough
+      // that a stuck SMTP handshake used to outlast the HTTP request calling
+      // it, surfacing as "Request timeout" on the frontend. Fail fast instead.
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 20000,
     });
     logger.info('Email transporter initialized with Resend');
     logger.info('RESEND_API_KEY exists: ' + !!process.env.RESEND_API_KEY);
