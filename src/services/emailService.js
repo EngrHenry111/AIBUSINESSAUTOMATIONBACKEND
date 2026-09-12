@@ -13,14 +13,16 @@ function getTransporter() {
       secure: false,
       auth: {
         user: 'resend',
-        pass: process.env.RESEND_API_KEY || process.env.EMAIL_PASS,
+        pass: process.env.RESEND_API_KEY,
       },
     });
+    logger.info('Email transporter initialized with Resend');
+    logger.info('RESEND_API_KEY exists: ' + !!process.env.RESEND_API_KEY);
   }
   return transporter;
 }
 
-const FROM = process.env.EMAIL_FROM || 'BizlyAI <onboarding@resend.dev>';
+const FROM = process.env.EMAIL_FROM || 'BizlyAI <noreply@bislyai.com>';
 const BASE_URL = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5174';
 
 // ── Base HTML wrapper ─────────────────────────────────────────────────────
@@ -346,24 +348,51 @@ async function sendVerificationEmail(email, name, link) {
   return send({ to: email, subject: 'Verify your BizlyAI email address', html });
 }
 
-// ── Core send function ─────────────────────────────────────────────────────
-async function send({ to, subject, html, text }) {
-  if (!process.env.RESEND_API_KEY && !process.env.EMAIL_PASS) {
-    logger.warn(`Email not configured (set RESEND_API_KEY). Would send to ${to}: ${subject}`);
-    return { messageId: 'not-configured', preview: `Email to ${to}: ${subject}` };
-  }
-
+// ── Core send function ───────────────────────────────────────────────────
+// No silent bypass here on purpose: an earlier version returned a fake
+// "not-configured" result and skipped the send entirely whenever
+// RESEND_API_KEY looked unset, which is exactly how emails went missing
+// from the Resend dashboard without a single failed-attempt log to show
+// for it. Every call now actually reaches nodemailer/Resend and any
+// failure (bad/missing key, unverified from-domain, etc.) is thrown and
+// logged with the real SMTP error code.
+async function sendEmail({ to, subject, html, text }) {
   try {
-    const info = await getTransporter().sendMail({ from: FROM, to, subject, html, text });
-    logger.info(`Email sent to ${to}: ${subject} [${info.messageId}]`);
-    return info;
+    logger.info(`Attempting to send email to: ${to}`);
+    logger.info(`Subject: ${subject}`);
+    logger.info(`From: ${FROM}`);
+    logger.info(`RESEND_API_KEY: ${process.env.RESEND_API_KEY ? 'SET' : 'NOT SET'}`);
+
+    const transport = getTransporter();
+
+    const result = await transport.sendMail({
+      from: FROM,
+      to,
+      subject,
+      html,
+      text: text || html.replace(/<[^>]*>/g, ''),
+    });
+
+    logger.info(`✅ Email sent successfully to ${to}`);
+    logger.info(`Message ID: ${result.messageId}`);
+    return result;
   } catch (err) {
-    logger.error(`Email failed to ${to}: ${err.message}`);
+    let serialized = err.message;
+    try { serialized = JSON.stringify(err); } catch { /* circular error object — message is enough */ }
+    logger.error(`❌ Email failed to ${to}: ${err.message}`);
+    logger.error(`Error code: ${err.code}`);
+    logger.error(`Full error: ${serialized}`);
     throw err;
   }
 }
 
+// Back-compat alias — every template function above (and a few
+// controllers) call `send(...)`; keep it working, backed by the same
+// real implementation as sendEmail.
+const send = sendEmail;
+
 module.exports = {
+  sendEmail,
   sendPasswordReset,
   sendTeamInvite,
   sendWelcome,

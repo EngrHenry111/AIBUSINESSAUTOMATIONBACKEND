@@ -37,4 +37,19 @@ router.post('/broadcast', [
   body('message').trim().notEmpty().withMessage('Message is required'),
 ], validate, ctrl.broadcast);
 
+// ── Email diagnostics (super-admin only, per the router.use guard above) ───
+router.post('/test-email', async (req, res) => {
+  try {
+    const { sendEmail } = require('../services/emailService');
+    await sendEmail({
+      to: req.body.to || 'henryengrakpan@gmail.com',
+      subject: 'BizlyAI Email Test',
+      html: '<h1>Email is working!</h1><p>Sent at: ' + new Date() + '</p>',
+    });
+    res.json({ success: true, message: 'Email sent!' });
+  } catch (err) {
+    res.json({ success: false, error: err.message, code: err.code });
+  }
+});
+
 module.exports = router;

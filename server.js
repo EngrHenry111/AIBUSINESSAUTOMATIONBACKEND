@@ -16,6 +16,12 @@ async function bootstrap() {
     await connectDB();
     logger.info('✅ MongoDB connected');
 
+    // Test email configuration on startup
+    require('./src/services/emailService');
+    logger.info('Email config check:');
+    logger.info('RESEND_API_KEY set: ' + !!process.env.RESEND_API_KEY);
+    logger.info('EMAIL_FROM: ' + process.env.EMAIL_FROM);
+
     // Ensure hot-path compound indexes exist (non-blocking on failure)
     require('./src/utils/ensureIndexes')().catch((e) => logger.warn(`ensureIndexes failed: ${e.message}`));
 
