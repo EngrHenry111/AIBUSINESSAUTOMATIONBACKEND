@@ -211,6 +211,50 @@ async function sendAppointmentConfirmation(email, customerName, title, dateTime,
   return send({ to: email, subject: `Appointment Confirmed: ${title}`, html });
 }
 
+async function sendMeetingInvite(email, name, meeting, organizerName) {
+  const dt = meeting.scheduledAt ? new Date(meeting.scheduledAt) : null;
+  const dateStr = dt ? dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : 'TBD';
+  const timeStr = dt ? dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 'TBD';
+  const html = baseTemplate(`Meeting Scheduled: ${meeting.title}`, `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">You've Been Invited to a Meeting 📅</h2>
+    <p style="color:#475569;margin:0 0 24px;">Hi ${name || 'there'},</p>
+    <div style="background:#f0f4ff;border:1px solid #dbe3ff;border-radius:12px;padding:20px;margin:0 0 24px;">
+      <p style="color:#0f172a;margin:0 0 10px;font-weight:700;font-size:17px;">${meeting.title}</p>
+      <p style="color:#334155;margin:4px 0;">📅 Date: <strong>${dateStr}</strong></p>
+      <p style="color:#334155;margin:4px 0;">🕒 Time: <strong>${timeStr}</strong></p>
+      ${meeting.duration ? `<p style="color:#334155;margin:4px 0;">⏱️ Duration: <strong>${meeting.duration} minutes</strong></p>` : ''}
+      <p style="color:#334155;margin:4px 0;">👤 Organizer: <strong>${organizerName || 'BizlyAI'}</strong></p>
+      ${meeting.location ? `<p style="color:#334155;margin:4px 0;">📍 Location: <strong>${meeting.location}</strong></p>` : ''}
+    </div>
+    ${meeting.description ? `<p style="color:#475569;margin:0 0 8px;font-weight:600;">Agenda</p><p style="color:#475569;line-height:1.7;white-space:pre-line;margin:0 0 24px;">${meeting.description}</p>` : ''}
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
+    <p style="color:#94a3b8;font-size:12px;margin:0;">This meeting was scheduled on BizlyAI.</p>
+  `);
+  return send({ to: email, subject: `Meeting Scheduled: ${meeting.title}`, html });
+}
+
+async function sendMeetingReminder(email, name, meeting, when) {
+  // when: '24h' | '1h'
+  const dt = meeting.scheduledAt ? new Date(meeting.scheduledAt) : null;
+  const timeStr = dt ? dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+  const heading = when === '1h' ? `Starting Soon: ${meeting.title} in 1 hour` : `Reminder: ${meeting.title} is Tomorrow`;
+  const line = when === '1h'
+    ? `Your meeting <strong>${meeting.title}</strong> starts in 1 hour, at <strong>${timeStr}</strong>.`
+    : `Your meeting <strong>${meeting.title}</strong> is scheduled for tomorrow at <strong>${timeStr}</strong>.`;
+  const html = baseTemplate(heading, `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">${when === '1h' ? '⏰ Starting Soon' : '🔔 Meeting Reminder'}</h2>
+    <p style="color:#475569;margin:0 0 24px;">Hi ${name || 'there'},</p>
+    <p style="color:#334155;line-height:1.7;margin:0 0 24px;">${line}</p>
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
+    <p style="color:#94a3b8;font-size:12px;margin:0;">Sent via BizlyAI.</p>
+  `);
+  return send({
+    to: email,
+    subject: when === '1h' ? `Starting Soon: ${meeting.title} in 1 hour` : `Reminder: ${meeting.title} is tomorrow`,
+    html,
+  });
+}
+
 async function sendBroadcast(email, name, subject, body) {
   const html = baseTemplate(subject, `
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">${subject}</h2>
@@ -325,6 +369,8 @@ module.exports = {
   sendWelcome,
   sendInvoiceReminder,
   sendAppointmentConfirmation,
+  sendMeetingInvite,
+  sendMeetingReminder,
   sendBroadcast,
   sendPortalLink,
   sendSubscriptionWarning,

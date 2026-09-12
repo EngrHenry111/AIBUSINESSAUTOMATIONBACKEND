@@ -85,4 +85,26 @@ const uploadReceipt = multer({
   },
 });
 
-module.exports = { cloudinary, uploadDocument, uploadAvatar, uploadProductImage, uploadReceipt, USE_CLOUDINARY };
+const MEETING_FILE_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+];
+
+const uploadMeetingFile = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, tempDir),
+    filename: (req, file, cb) => cb(null, `mtg-${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`),
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || MEETING_FILE_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only PDF, Word, PowerPoint, Excel or image files are allowed'), false);
+  },
+});
+
+module.exports = { cloudinary, uploadDocument, uploadAvatar, uploadProductImage, uploadReceipt, uploadMeetingFile, USE_CLOUDINARY };

@@ -54,6 +54,12 @@ async function bootstrap() {
     setInterval(checkSubscriptions, 24 * 60 * 60 * 1000);
     logger.info('✅ Subscription checker scheduled (runs every 24h)');
 
+    // ── Meeting reminders (24h-before / 1h-before) ─────────────────────────
+    const { checkMeetingReminders } = require('./src/utils/meetingReminders');
+    checkMeetingReminders();
+    setInterval(checkMeetingReminders, 30 * 60 * 1000);
+    logger.info('✅ Meeting reminder checker scheduled (runs every 30min)');
+
     // Socket.io handlers
     io.on('connection', (socket) => {
       logger.debug(`Socket connected: ${socket.id}`);
