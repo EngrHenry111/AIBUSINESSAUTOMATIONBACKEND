@@ -47,7 +47,7 @@ function baseTemplate(title, content, brand) {
             </p>`
     : `
             <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
-              ⚡ EngrHenryTech BusinessAI
+              BizlyAI
             </h1>
             <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:14px;">
               Powered by AI · Built for Business
@@ -80,8 +80,8 @@ function baseTemplate(title, content, brand) {
         <tr>
           <td style="background:#f8fafc;padding:24px 40px;text-align:center;border-top:1px solid #e2e8f0;">
             <p style="color:#94a3b8;font-size:12px;margin:0;">
-              © ${new Date().getFullYear()} EngrHenryTech BusinessAI · All rights reserved<br/>
-              <a href="${BASE_URL}" style="color:#6366f1;text-decoration:none;">Visit Platform</a>
+              © ${new Date().getFullYear()} BizlyAI by EngrHenryTech. All rights reserved<br/>
+              <a href="${BASE_URL}" style="color:#6366f1;text-decoration:none;">bislyai.com</a>
             </p>
           </td>
         </tr>
@@ -97,11 +97,11 @@ function baseTemplate(title, content, brand) {
 async function sendPasswordReset(email, name, resetToken) {
   const resetUrl = `${BASE_URL}/reset-password/${resetToken}`;
   const html = baseTemplate('Reset Your Password', `
-    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Reset Your Password</h2>
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Reset your password</h2>
     <p style="color:#475569;margin:0 0 24px;">Hi ${name || 'there'},</p>
     <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
-      We received a request to reset your password for your EngrHenryTech BusinessAI account.
-      Click the button below to set a new password. This link expires in <strong>10 minutes</strong>.
+      We received a request to reset your BizlyAI password.
+      Click the button below to reset it. This link expires in <strong>10 minutes</strong>.
     </p>
     <div style="text-align:center;margin:32px 0;">
       <a href="${resetUrl}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
@@ -109,12 +109,12 @@ async function sendPasswordReset(email, name, resetToken) {
       </a>
     </div>
     <p style="color:#94a3b8;font-size:13px;margin:24px 0 0;">
-      If you didn't request this, ignore this email — your password won't change.<br/>
+      If you did not request a password reset, please ignore this email — your password won't change.<br/>
       Or copy this link: <a href="${resetUrl}" style="color:#6366f1;">${resetUrl}</a>
     </p>
   `);
 
-  return send({ to: email, subject: 'Reset your EngrHenryTech BusinessAI password', html });
+  return send({ to: email, subject: 'Reset your BizlyAI password', html });
 }
 
 async function sendTeamInvite(email, name, inviterName, companyName, tempPassword) {
@@ -122,8 +122,8 @@ async function sendTeamInvite(email, name, inviterName, companyName, tempPasswor
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">You're Invited! 🎉</h2>
     <p style="color:#475569;margin:0 0 24px;">Hi ${name},</p>
     <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
-      <strong>${inviterName}</strong> has invited you to join <strong>${companyName}</strong> on 
-      EngrHenryTech BusinessAI — the AI-powered business operations platform.
+      <strong>${inviterName}</strong> has invited you to join <strong>${companyName}</strong> on
+      BizlyAI — the AI-powered business operations platform.
     </p>
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin:24px 0;">
       <p style="color:#475569;margin:0 0 8px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Your Login Details</p>
@@ -142,14 +142,14 @@ async function sendTeamInvite(email, name, inviterName, companyName, tempPasswor
     </p>
   `);
 
-  return send({ to: email, subject: `You've been invited to ${companyName} on EngrHenryTech BusinessAI`, html });
+  return send({ to: email, subject: `You've been invited to ${companyName} on BizlyAI`, html });
 }
 
 async function sendWelcome(email, name, companyName) {
-  const html = baseTemplate('Welcome to EngrHenryTech BusinessAI', `
+  const html = baseTemplate('Welcome to BizlyAI', `
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Welcome aboard, ${name}! 🚀</h2>
     <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
-      Your workspace <strong>${companyName}</strong> is ready on EngrHenryTech BusinessAI.
+      Your workspace <strong>${companyName}</strong> is ready on BizlyAI.
       Here's what you can do to get started:
     </p>
     <table width="100%" cellpadding="0" cellspacing="0">
@@ -181,7 +181,7 @@ async function sendWelcome(email, name, companyName) {
     </div>
   `);
 
-  return send({ to: email, subject: `Welcome to EngrHenryTech BusinessAI, ${name}!`, html });
+  return send({ to: email, subject: 'Welcome to BizlyAI', html });
 }
 
 async function sendInvoiceReminder(email, customerName, invoiceNumber, amount, dueDate, reminderText) {
@@ -195,7 +195,7 @@ async function sendInvoiceReminder(email, customerName, invoiceNumber, amount, d
     <div style="color:#475569;line-height:1.8;white-space:pre-line;">${reminderText}</div>
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
     <p style="color:#94a3b8;font-size:12px;">
-      Sent via EngrHenryTech BusinessAI
+      Sent via BizlyAI
     </p>
   `);
 
@@ -213,7 +213,7 @@ async function sendAppointmentConfirmation(email, customerName, title, dateTime,
     </div>
     <div style="color:#475569;line-height:1.8;white-space:pre-line;">${confirmationText}</div>
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
-    <p style="color:#94a3b8;font-size:12px;">Sent via EngrHenryTech BusinessAI</p>
+    <p style="color:#94a3b8;font-size:12px;">Sent via BizlyAI</p>
   `);
 
   return send({ to: email, subject: `Appointment Confirmed: ${title}`, html });
@@ -241,24 +241,47 @@ async function sendMeetingInvite(email, name, meeting, organizerName) {
   return send({ to: email, subject: `Meeting Scheduled: ${meeting.title}`, html });
 }
 
+// Google Calendar "add event" link — no ICS generation needed, works from any inbox.
+function googleCalendarLink(meeting) {
+  if (!meeting.scheduledAt) return null;
+  const toUtcStamp = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const start = new Date(meeting.scheduledAt);
+  const end = new Date(start.getTime() + (Number(meeting.duration) || 60) * 60000);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: meeting.title || 'Meeting',
+    dates: `${toUtcStamp(start)}/${toUtcStamp(end)}`,
+    details: meeting.description || '',
+    location: meeting.location || '',
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
 async function sendMeetingReminder(email, name, meeting, when) {
   // when: '24h' | '1h'
   const dt = meeting.scheduledAt ? new Date(meeting.scheduledAt) : null;
+  const dateStr = dt ? dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : 'TBD';
   const timeStr = dt ? dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
   const heading = when === '1h' ? `Starting Soon: ${meeting.title} in 1 hour` : `Reminder: ${meeting.title} is Tomorrow`;
   const line = when === '1h'
     ? `Your meeting <strong>${meeting.title}</strong> starts in 1 hour, at <strong>${timeStr}</strong>.`
     : `Your meeting <strong>${meeting.title}</strong> is scheduled for tomorrow at <strong>${timeStr}</strong>.`;
+  const calLink = googleCalendarLink(meeting);
   const html = baseTemplate(heading, `
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">${when === '1h' ? '⏰ Starting Soon' : '🔔 Meeting Reminder'}</h2>
     <p style="color:#475569;margin:0 0 24px;">Hi ${name || 'there'},</p>
     <p style="color:#334155;line-height:1.7;margin:0 0 24px;">${line}</p>
+    ${meeting.location ? `<p style="color:#334155;margin:0 0 24px;">📍 ${meeting.location}</p>` : ''}
+    ${meeting.description ? `<p style="color:#475569;margin:0 0 8px;font-weight:600;">Agenda</p><p style="color:#475569;line-height:1.7;white-space:pre-line;margin:0 0 24px;">${meeting.description}</p>` : ''}
+    ${calLink ? `<div style="text-align:center;margin:28px 0;"><a href="${calLink}" style="background:#6366f1;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;display:inline-block;">Add to Calendar</a></div>` : ''}
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
     <p style="color:#94a3b8;font-size:12px;margin:0;">Sent via BizlyAI.</p>
   `);
   return send({
     to: email,
-    subject: when === '1h' ? `Starting Soon: ${meeting.title} in 1 hour` : `Reminder: ${meeting.title} is tomorrow`,
+    subject: when === '1h'
+      ? `Starting Soon: ${meeting.title} - starts in 1 hour`
+      : `Reminder: ${meeting.title} - ${dateStr}`,
     html,
   });
 }
@@ -270,7 +293,7 @@ async function sendBroadcast(email, name, subject, body) {
     <div style="color:#475569;line-height:1.8;white-space:pre-line;">${body}</div>
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
     <p style="color:#94a3b8;font-size:12px;">
-      You're receiving this because you own a workspace on EngrHenryTech BusinessAI.
+      You're receiving this because you own a workspace on BizlyAI.
     </p>
   `);
 
@@ -278,11 +301,11 @@ async function sendBroadcast(email, name, subject, body) {
 }
 
 async function sendPortalLink(email, companyName, link) {
-  const html = baseTemplate('Your Documents', `
+  const html = baseTemplate('Your Secure Access Link', `
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">Access Your Documents</h2>
     <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
-      ${companyName || 'Your provider'} has shared your invoices, orders and appointments with you.
-      Click below to view them — the link works for <strong>24 hours</strong>.
+      <strong>${companyName || 'Your provider'}</strong> has shared your invoices, orders and appointments with you.
+      Click below to view your documents.
     </p>
     <div style="text-align:center;margin:32px 0;">
       <a href="${link}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
@@ -290,12 +313,13 @@ async function sendPortalLink(email, companyName, link) {
       </a>
     </div>
     <p style="color:#94a3b8;font-size:13px;margin:0;">
-      If you didn't request this, you can ignore this email.<br/>
+      This link expires in <strong>24 hours</strong>.<br/>
+      If you did not request this, please ignore this email.<br/>
       Or paste this link: <a href="${link}" style="color:#6366f1;">${link}</a>
     </p>
   `);
 
-  return send({ to: email, subject: `Access your documents from ${companyName || 'your provider'}`, html });
+  return send({ to: email, subject: `Your secure access link from ${companyName || 'your provider'}`, html });
 }
 
 async function sendSubscriptionWarning(email, name, planName, endDate) {
@@ -343,7 +367,7 @@ async function sendVerificationEmail(email, name, link) {
     </p>
     <div style="text-align:center;margin:32px 0;">
       <a href="${link}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
-        Verify Email
+        Verify Email Address
       </a>
     </div>
     <p style="color:#94a3b8;font-size:13px;margin:0;">
@@ -377,6 +401,14 @@ async function sendEmail({ to, subject, html, text }) {
       subject,
       html,
       text: text || html.replace(/<[^>]*>/g, ''),
+      // Reduces spam-folder odds: a stable-per-message reference ID plus a
+      // real unsubscribe path are things inbox providers (Gmail, Outlook,
+      // Yahoo) explicitly check for on bulk/transactional senders.
+      headers: {
+        'X-Entity-Ref-ID': new Date().getTime().toString(),
+        'List-Unsubscribe': '<mailto:unsubscribe@bislyai.com>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
     });
 
     logger.info(`✅ Email sent successfully to ${to}`);
