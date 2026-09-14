@@ -14,6 +14,7 @@ const path = require('path');
 require('./config/passport');
 
 const { generalLimiter, uploadLimiter } = require('./middleware/rateLimitMiddleware');
+const { checkIpBlocked, trackRequestRate } = require('./utils/suspiciousActivity');
 const errorMiddleware = require('./middleware/errorMiddleware');
 const logger = require('./utils/logger');
 
@@ -57,13 +58,35 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ─── Security Headers ────────────────────────────────────────────────────────
-// This is a pure JSON API (the SPA is served by Vercel), so a CSP here only
-// affects error pages / static assets — turn it off to avoid false positives.
+// This is a pure JSON API (the SPA is served by Vercel) so a CSP here mostly
+// protects the rare error page / static asset, but automated security scans
+// (and enterprise vendor questionnaires) check for its presence regardless —
+// a locked-down default costs nothing since no HTML is rendered from here.
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      // A few routes (invoice / meeting-minutes PDF export) return real,
+      // inline-styled HTML with a Cloudinary-hosted logo, opened directly in
+      // a browser tab — defaultSrc 'none' would blank those out. Scripts and
+      // framing (the actual XSS/clickjacking surface) stay fully locked down.
+      defaultSrc: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'https:', 'data:'],
+      scriptSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+    },
+  },
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  frameguard: { action: 'deny' },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
 }));
+// Legacy header modern browsers ignore (and helmet deliberately omits since
+// v4), but enterprise security checklists still ask for it verbatim.
+app.use((req, res, next) => {
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 // Explicit allow-list from CLIENT_URL (comma-separated), normalised without a
@@ -101,6 +124,13 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); // ensure preflight is answered for every route
+
+// ─── Abuse detection ─────────────────────────────────────────────────────────
+// After CORS so a blocked client still gets a readable JSON 403 instead of an
+// opaque CORS failure. Reject already-blocked IPs before any real work, and
+// log request bursts that stay under the hard rate-limit caps below.
+app.use(checkIpBlocked);
+app.use(trackRequestRate);
 
 // ─── Body Parsing ─────────────────────────────────────────────────────────────
 // The Paystack webhook needs its raw body for signature verification, so skip

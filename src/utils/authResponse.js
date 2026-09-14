@@ -5,8 +5,8 @@ const { generateAccessToken, generateRefreshToken, setTokenCookies } = require('
 // Shared "you're logged in" response — used by password login, 2FA completion
 // and backup-code login.
 function sendTokenResponse(user, company, statusCode, res, extra = {}) {
-  const accessToken = generateAccessToken(user._id);
-  const refreshToken = generateRefreshToken(user._id);
+  const accessToken = generateAccessToken(user._id, user.tokenVersion);
+  const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
   setTokenCookies(res, accessToken, refreshToken);
   res.status(statusCode).json({
     success: true,

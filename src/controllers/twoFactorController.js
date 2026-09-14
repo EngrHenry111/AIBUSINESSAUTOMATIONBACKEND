@@ -11,6 +11,8 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { sendTokenResponse } = require('../utils/authResponse');
 const { generateRefreshToken } = require('../utils/generateTokens');
+const securityLogger = require('../utils/securityLogger');
+const { recordFailedLogin } = require('../utils/suspiciousActivity');
 
 const hashCode = (c) => crypto.createHash('sha256').update(String(c)).digest('hex');
 const cleanToken = (t) => String(t || '').replace(/\s+/g, '');
@@ -91,13 +93,17 @@ exports.verifyBackupCode = async (req, res, next) => {
     if (!user || !user.twoFactorEnabled) return next(new AppError('Two-factor authentication is not set up.', 400));
 
     const match = (user.backupCodes || []).find((b) => !b.used && b.code === hashCode(code));
-    if (!match) return next(new AppError('Invalid or already-used backup code.', 401));
+    if (!match) {
+      securityLogger.logFailed2FA(user.email, req.ip);
+      await recordFailedLogin(req.ip, user.email);
+      return next(new AppError('Invalid or already-used backup code.', 401));
+    }
 
     match.used = true;
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id);
+    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;

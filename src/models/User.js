@@ -26,6 +26,12 @@ const userSchema = new mongoose.Schema({
   loginIPs: [{ ip: String, timestamp: Date }],
   failedLoginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date },
+  // Bumped on password change so every previously-issued JWT (which embeds
+  // the version it was signed with) is rejected on its next use — the one
+  // request that increments this returns a freshly-signed pair instead, so
+  // that device stays logged in while every other device is forced to sign
+  // in again.
+  tokenVersion: { type: Number, default: 0 },
   // default true so users that predate this field are treated as verified;
   // register() explicitly sets it false for new sign-ups
   emailVerified: { type: Boolean, default: true },
@@ -68,7 +74,7 @@ userSchema.methods.incLoginAttempts = async function () {
   }
   const updates = { $inc: { failedLoginAttempts: 1 } };
   if (this.failedLoginAttempts + 1 >= 5) {
-    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 };
+    updates.$set = { lockUntil: Date.now() + 60 * 60 * 1000 }; // 1 hour
   }
   return this.updateOne(updates);
 };

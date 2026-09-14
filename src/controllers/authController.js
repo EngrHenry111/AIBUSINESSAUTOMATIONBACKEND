@@ -25,6 +25,8 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { sendTokenResponse } = require('../utils/authResponse');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
+const securityLogger = require('../utils/securityLogger');
+const { recordFailedLogin } = require('../utils/suspiciousActivity');
 
 exports.register = async (req, res, next) => {
   try {
@@ -45,7 +47,7 @@ exports.register = async (req, res, next) => {
     company.owner = user._id;
     await company.save();
 
-    const refreshToken = generateRefreshToken(user._id);
+    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
 
@@ -70,12 +72,24 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email }).select('+password +refreshToken');
-    if (!user) return next(new AppError('Invalid email or password.', 401));
-    if (user.isLocked()) return next(new AppError('Account locked. Try again in 2 hours.', 423));
+    if (!user) {
+      securityLogger.logFailedLogin(email, req.ip);
+      await recordFailedLogin(req.ip, email);
+      return next(new AppError('Invalid email or password.', 401));
+    }
+    if (user.isLocked()) {
+      securityLogger.logAccountLockout(user.email, req.ip);
+      await recordFailedLogin(req.ip, email);
+      return next(new AppError('Account locked. Try again in 1 hour.', 423));
+    }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      const willLock = user.failedLoginAttempts + 1 >= 5;
       await user.incLoginAttempts();
+      securityLogger.logFailedLogin(email, req.ip);
+      await recordFailedLogin(req.ip, email);
+      if (willLock) securityLogger.logAccountLockout(user.email, req.ip);
       return next(new AppError('Invalid email or password.', 401));
     }
     if (user.status !== 'active') return next(new AppError('Account is not active.', 403));
@@ -91,10 +105,13 @@ exports.login = async (req, res, next) => {
       return res.status(200).json({ success: true, requiresTwoFactor: true, tempToken });
     }
 
+    const isNewDevice = !(user.loginIPs || []).some((l) => l.ip === req.ip);
+    if (isNewDevice && user.loginIPs?.length) securityLogger.logNewDeviceLogin(user._id, user.email, req.ip);
+
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id);
+    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;
@@ -107,8 +124,8 @@ exports.googleCallback = async (req, res, next) => {
   try {
     const user = req.user;
     const company = user.companyId ? await Company.findById(user.companyId) : null;
-    const accessToken = generateAccessToken(user._id);
-    const refreshToken = generateRefreshToken(user._id);
+    const accessToken = generateAccessToken(user._id, user.tokenVersion);
+    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
     const frontendUrl = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5173';
@@ -132,8 +149,11 @@ exports.refreshToken = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
     const user = await User.findById(decoded.id).select('+refreshToken');
     if (!user || user.refreshToken !== token) return next(new AppError('Invalid refresh token.', 401));
-    const newAccessToken = generateAccessToken(user._id);
-    const newRefreshToken = generateRefreshToken(user._id);
+    if ((decoded.tokenVersion || 0) !== (user.tokenVersion || 0)) {
+      return next(new AppError('Session expired. Please log in again.', 401));
+    }
+    const newAccessToken = generateAccessToken(user._id, user.tokenVersion);
+    const newRefreshToken = generateRefreshToken(user._id, user.tokenVersion);
     user.refreshToken = newRefreshToken;
     await user.save({ validateBeforeSave: false });
     setTokenCookies(res, newAccessToken, newRefreshToken);
@@ -199,8 +219,10 @@ exports.resetPassword = async (req, res, next) => {
     user.passwordResetExpires = undefined;
     user.failedLoginAttempts = 0;
     user.lockUntil = undefined;
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // sign out every device
     await user.save();
 
+    securityLogger.logPasswordChange(user._id, user.email, req.ip);
     res.status(200).json({ success: true, message: 'Password reset successfully. You can now log in.' });
   } catch (err) { next(err); }
 };
@@ -248,12 +270,16 @@ exports.complete2FALogin = async (req, res, next) => {
 
     const speakeasy = require('speakeasy');
     const ok = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token: code, window: 1 });
-    if (!ok) return next(new AppError('Incorrect code. Please try again.', 401));
+    if (!ok) {
+      securityLogger.logFailed2FA(user.email, req.ip);
+      await recordFailedLogin(req.ip, user.email);
+      return next(new AppError('Incorrect code. Please try again.', 401));
+    }
 
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id);
+    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;

@@ -3,13 +3,16 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
-const generateAccessToken = (userId) =>
-  jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+// tokenVersion is embedded so authMiddleware can reject every token issued
+// before a password change, forcing re-login everywhere except the device
+// that made the change (see User.tokenVersion).
+const generateAccessToken = (userId, tokenVersion = 0) =>
+  jwt.sign({ id: userId, tokenVersion }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
   });
 
-const generateRefreshToken = (userId) =>
-  jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, {
+const generateRefreshToken = (userId, tokenVersion = 0) =>
+  jwt.sign({ id: userId, tokenVersion }, process.env.JWT_REFRESH_SECRET, {
     expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   });
 

@@ -25,6 +25,13 @@ const protect = async (req, res, next) => {
       return next(new AppError('User no longer exists.', 401));
     }
 
+    // Tokens signed before the account's last password change carry a stale
+    // (or absent, for tokens issued pre-rollout — treated as 0) version and
+    // are rejected, forcing every other device to sign in again.
+    if ((decoded.tokenVersion || 0) !== (user.tokenVersion || 0)) {
+      return next(new AppError('Session expired. Please log in again.', 401));
+    }
+
     if (user.status !== 'active') {
       return next(new AppError('Account is not active. Please contact support.', 403));
     }

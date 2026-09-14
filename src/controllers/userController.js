@@ -6,6 +6,8 @@ const Company = require('../models/Company');
 const { cloudinary } = require('../config/cloudinary');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
+const securityLogger = require('../utils/securityLogger');
+const { generateAccessToken, generateRefreshToken, setTokenCookies } = require('../utils/generateTokens');
 const logger = require('../utils/logger');
 
 const safeJson = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
@@ -59,14 +61,24 @@ exports.updateProfile = async (req, res, next) => {
 exports.changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user._id).select('+password');
+    const user = await User.findById(req.user._id).select('+password +refreshToken');
     if (!(await user.comparePassword(currentPassword))) {
       return next(new AppError('Current password is incorrect.', 401));
     }
     user.password = newPassword;
+    // Invalidate every previously-issued token (all other devices are forced
+    // to sign in again) — then immediately issue this device a fresh pair so
+    // its own session isn't the one that gets kicked out.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    const accessToken = generateAccessToken(user._id, user.tokenVersion);
+    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
+    user.refreshToken = refreshToken;
     await user.save();
+
+    setTokenCookies(res, accessToken, refreshToken);
+    securityLogger.logPasswordChange(req.user._id, user.email, req.ip);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.password_change', ip: req.ip });
-    res.status(200).json({ success: true, message: 'Password updated successfully.' });
+    res.status(200).json({ success: true, message: 'Password updated successfully.', accessToken, refreshToken });
   } catch (err) { next(err); }
 };
 
