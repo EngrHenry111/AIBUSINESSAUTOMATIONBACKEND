@@ -78,7 +78,7 @@ exports.changePassword = async (req, res, next) => {
     setTokenCookies(res, accessToken, refreshToken);
     securityLogger.logPasswordChange(req.user._id, user.email, req.ip);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.password_change', ip: req.ip });
-    res.status(200).json({ success: true, message: 'Password updated successfully.', accessToken, refreshToken });
+    res.status(200).json({ success: true, message: 'Password updated successfully.' });
   } catch (err) { next(err); }
 };
 

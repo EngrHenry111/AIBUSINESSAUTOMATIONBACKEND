@@ -47,10 +47,6 @@ exports.register = async (req, res, next) => {
     company.owner = user._id;
     await company.save();
 
-    const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
-    user.refreshToken = refreshToken;
-    await user.save({ validateBeforeSave: false });
-
     // Email verification — non-blocking; user can use the app in the meantime
     await issueVerification(user);
 
@@ -64,7 +60,7 @@ exports.register = async (req, res, next) => {
       action: 'user.register', description: `New company: ${companyName}`, ip: req.ip,
     });
 
-    sendTokenResponse(user, company, 201, res);
+    await sendTokenResponse(user, company, 201, res);
   } catch (err) { next(err); }
 };
 
@@ -111,25 +107,27 @@ exports.login = async (req, res, next) => {
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;
     await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.login', ip: req.ip });
-    sendTokenResponse(user, company, 200, res);
+    await sendTokenResponse(user, company, 200, res);
   } catch (err) { next(err); }
 };
 
 exports.googleCallback = async (req, res, next) => {
   try {
     const user = req.user;
-    const company = user.companyId ? await Company.findById(user.companyId) : null;
     const accessToken = generateAccessToken(user._id, user.tokenVersion);
     const refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
+    // Tokens go out as httpOnly cookies only — never in the redirect URL,
+    // which would otherwise land in browser history, server access logs and
+    // the Referer header of whatever loads next.
+    setTokenCookies(res, accessToken, refreshToken);
     const frontendUrl = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5173';
-    res.redirect(`${frontendUrl}/auth/google/callback?token=${accessToken}&refresh=${refreshToken}`);
+    res.redirect(`${frontendUrl}/auth/google/callback`);
   } catch (err) { next(err); }
 };
 
@@ -157,7 +155,7 @@ exports.refreshToken = async (req, res, next) => {
     user.refreshToken = newRefreshToken;
     await user.save({ validateBeforeSave: false });
     setTokenCookies(res, newAccessToken, newRefreshToken);
-    res.status(200).json({ success: true, accessToken: newAccessToken, refreshToken: newRefreshToken });
+    res.status(200).json({ success: true });
   } catch (err) {
     if (err.name === 'TokenExpiredError') return next(new AppError('Refresh token expired. Please log in.', 401));
     next(err);
@@ -279,12 +277,11 @@ exports.complete2FALogin = async (req, res, next) => {
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;
     await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.login_2fa', ip: req.ip });
-    sendTokenResponse(user, company, 200, res);
+    await sendTokenResponse(user, company, 200, res);
   } catch (err) { next(err); }
 };
 

@@ -10,7 +10,6 @@ const Company = require('../models/Company');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { sendTokenResponse } = require('../utils/authResponse');
-const { generateRefreshToken } = require('../utils/generateTokens');
 const securityLogger = require('../utils/securityLogger');
 const { recordFailedLogin } = require('../utils/suspiciousActivity');
 
@@ -103,13 +102,12 @@ exports.verifyBackupCode = async (req, res, next) => {
     user.lastLogin = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     user.loginIPs = [...(user.loginIPs || []).slice(-9), { ip: req.ip, timestamp: new Date() }];
-    user.refreshToken = generateRefreshToken(user._id, user.tokenVersion);
     await user.save({ validateBeforeSave: false });
 
     const company = user.companyId ? await Company.findById(user.companyId) : null;
     await writeAuditLog({ companyId: user.companyId, userId: user._id, action: 'user.login_2fa_backup', ip: req.ip });
 
     const remaining = user.backupCodes.filter((b) => !b.used).length;
-    sendTokenResponse(user, company, 200, res, { usedBackupCode: true, backupCodesRemaining: remaining });
+    await sendTokenResponse(user, company, 200, res, { usedBackupCode: true, backupCodesRemaining: remaining });
   } catch (err) { next(err); }
 };

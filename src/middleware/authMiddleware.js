@@ -6,13 +6,10 @@ const { AppError } = require('./errorMiddleware');
 
 const protect = async (req, res, next) => {
   try {
-    let token;
-
-    if (req.headers.authorization?.startsWith('Bearer ')) {
-      token = req.headers.authorization.split(' ')[1];
-    } else if (req.cookies?.accessToken) {
-      token = req.cookies.accessToken;
-    }
+    // httpOnly cookie is the primary session credential; the Authorization
+    // header remains a fallback for non-browser API clients (tooling, tests)
+    // that can't hold cookies.
+    const token = req.cookies?.accessToken || req.headers.authorization?.split(' ')[1];
 
     if (!token) {
       return next(new AppError('Authentication required. Please log in.', 401));
@@ -56,10 +53,7 @@ const protect = async (req, res, next) => {
 
 const optionalAuth = async (req, res, next) => {
   try {
-    let token;
-    if (req.headers.authorization?.startsWith('Bearer ')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    const token = req.cookies?.accessToken || req.headers.authorization?.split(' ')[1];
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(decoded.id);
