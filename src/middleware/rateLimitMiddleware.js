@@ -33,4 +33,12 @@ const aiLimiter = createLimiter(
   'Too many AI requests. Please wait before trying again.'
 );
 
-module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter };
+// Public, unauthenticated storefront — no req.user to key on, so this is
+// purely per-IP. Tighter than generalLimiter (which still applies too)
+// since these routes have no login wall at all to slow down abuse.
+const publicStoreLimiter = createLimiter(
+  15 * 60 * 1000, 100,
+  'Too many requests. Please try again in 15 minutes.'
+);
+
+module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter };

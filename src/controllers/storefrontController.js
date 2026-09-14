@@ -26,6 +26,10 @@ async function findStore(slug, { requirePayments = false } = {}) {
   return company;
 }
 
+// Explicit allowlist for anything shown to an anonymous shopper. `_id` here
+// is the PRODUCT's id (required so the cart/checkout can say which item it
+// means) — never the company's. costPrice, createdBy and companyId are
+// deliberately never included.
 const publicProduct = (p) => ({
   _id: p._id,
   name: p.name,
@@ -34,12 +38,40 @@ const publicProduct = (p) => ({
   currency: p.currency || 'NGN',
   images: p.images || [],
   category: p.category || null,
+  sku: p.sku || null,
   unit: p.unit || null,
   stock: {
     quantity: p.stock?.trackStock ? p.stock.quantity : null,
     trackStock: Boolean(p.stock?.trackStock),
     lowStockThreshold: p.stock?.lowStockThreshold ?? 5,
     allowOutOfStock: Boolean(p.stock?.allowOutOfStock),
+  },
+});
+
+// Same idea for the company behind a store: an explicit allowlist so it's
+// structurally impossible to leak _id, companyId or paymentSettings by
+// spreading the raw Mongoose document into a response.
+const publicStore = (company) => ({
+  name: company.companyName,
+  slug: company.storeSlug,
+  logo: company.logo || null,
+  currency: 'NGN',
+  acceptsPayments: Boolean(company.paymentSettings?.isPaymentSetup),
+  settings: {
+    banner: company.storeSettings?.banner || null,
+    description: company.storeSettings?.description || company.profile?.tagline || null,
+    announcement: company.storeSettings?.announcement || null,
+    primaryColor: company.storeSettings?.primaryColor || '#6366f1',
+    showOutOfStock: company.storeSettings?.showOutOfStock !== false,
+    allowBackorders: Boolean(company.storeSettings?.allowBackorders),
+  },
+  // Public contact details only — never bank details on the storefront.
+  contact: {
+    email: company.profile?.email || null,
+    phone: company.profile?.phone || null,
+    address: company.profile?.address || null,
+    website: company.website || null,
+    socials: company.profile?.socials || null,
   },
 });
 
@@ -73,29 +105,7 @@ exports.getStore = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: {
-        store: {
-          name: company.companyName,
-          slug: company.storeSlug,
-          logo: company.logo || null,
-          currency: 'NGN',
-          acceptsPayments: Boolean(company.paymentSettings?.isPaymentSetup),
-          settings: {
-            banner: company.storeSettings?.banner || null,
-            description: company.storeSettings?.description || company.profile?.tagline || null,
-            announcement: company.storeSettings?.announcement || null,
-            primaryColor: company.storeSettings?.primaryColor || '#6366f1',
-            showOutOfStock: company.storeSettings?.showOutOfStock !== false,
-            allowBackorders: Boolean(company.storeSettings?.allowBackorders),
-          },
-          // Public contact details only — never bank details on the storefront.
-          contact: {
-            email: company.profile?.email || null,
-            phone: company.profile?.phone || null,
-            address: company.profile?.address || null,
-            website: company.website || null,
-            socials: company.profile?.socials || null,
-          },
-        },
+        store: publicStore(company),
         products: products.map(publicProduct),
         categories: categories.sort(),
       },
