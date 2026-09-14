@@ -79,9 +79,11 @@ function baseTemplate(title, content, brand) {
         <!-- Footer -->
         <tr>
           <td style="background:#f8fafc;padding:24px 40px;text-align:center;border-top:1px solid #e2e8f0;">
-            <p style="color:#94a3b8;font-size:12px;margin:0;">
-              © ${new Date().getFullYear()} BizlyAI by EngrHenryTech. All rights reserved<br/>
-              <a href="${BASE_URL}" style="color:#6366f1;text-decoration:none;">bislyai.com</a>
+            <p style="color:#94a3b8;font-size:12px;margin:0;line-height:1.7;">
+              © ${new Date().getFullYear()} BizlyAI by ENGRHENRY TECH | RC: 9823522<br/>
+              29 Pack Road, Itu, Akwa Ibom State, Nigeria<br/>
+              <a href="${BASE_URL}" style="color:#6366f1;text-decoration:none;">bislyai.com</a> |
+              <a href="mailto:support@bislyai.com" style="color:#6366f1;text-decoration:none;"> support@bislyai.com</a>
             </p>
           </td>
         </tr>
@@ -398,6 +400,7 @@ async function sendEmail({ to, subject, html, text }) {
     const result = await transport.sendMail({
       from: FROM,
       to,
+      replyTo: 'support@bislyai.com',
       subject,
       html,
       text: text || html.replace(/<[^>]*>/g, ''),
