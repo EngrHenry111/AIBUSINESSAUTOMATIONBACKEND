@@ -22,12 +22,22 @@ const generateResetToken = () => {
   return { token, hash };
 };
 
+// Render always sets RENDER=true regardless of whatever NODE_ENV is (or
+// isn't) configured on the service dashboard. Trusting NODE_ENV alone bit us
+// once already: if it's left unset in Render's env vars, isProd silently
+// evaluates false, cookies fall back to SameSite=Lax, and a Lax cookie is
+// never attached to the cross-site XHR/fetch calls the bislyai.com frontend
+// makes to this onrender.com API — only login's own response still carries
+// user data, so the dashboard renders for a moment before every subsequent
+// request 401s with no cookie and the client bounces back to /login.
+const isProd = () => process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+
 const setTokenCookies = (res, accessToken, refreshToken) => {
-  const isProd = process.env.NODE_ENV === 'production';
+  const prod = isProd();
   // Frontend (bislyai.com) and API (onrender.com) are different sites, so cookies
   // must be SameSite=None; Secure to be sent on cross-site requests. In dev
   // (same-origin via the Vite proxy) Lax is fine and works without HTTPS.
-  const crossSite = { httpOnly: true, secure: isProd, sameSite: isProd ? 'none' : 'lax' };
+  const crossSite = { httpOnly: true, secure: prod, sameSite: prod ? 'none' : 'lax' };
   res.cookie('accessToken', accessToken, {
     ...crossSite,
     maxAge: 15 * 60 * 1000,
@@ -39,4 +49,4 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
   });
 };
 
-module.exports = { generateAccessToken, generateRefreshToken, generateResetToken, setTokenCookies };
+module.exports = { generateAccessToken, generateRefreshToken, generateResetToken, setTokenCookies, isProd };

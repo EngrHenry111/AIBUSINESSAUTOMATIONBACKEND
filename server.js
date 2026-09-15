@@ -123,6 +123,8 @@ async function bootstrap() {
 
     httpServer.listen(PORT, () => {
       logger.info(`🚀 Server running in ${NODE_ENV} on port ${PORT}`);
+      const { isProd } = require('./src/utils/generateTokens');
+      logger.info(`🍪 Auth cookies: ${isProd() ? 'SameSite=None; Secure (cross-site mode)' : 'SameSite=Lax (dev mode)'} — NODE_ENV=${process.env.NODE_ENV || '(unset)'} RENDER=${process.env.RENDER || '(unset)'}`);
       logger.info(`🔗 API: http://localhost:${PORT}/api/v1`);
     });
 
