@@ -41,4 +41,11 @@ const publicStoreLimiter = createLimiter(
   'Too many requests. Please try again in 15 minutes.'
 );
 
-module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter };
+// Chat widget messages hit Groq + embeddings per request, so this gets its
+// own tighter, per-IP cap on top of publicStoreLimiter's general one.
+const widgetMessageLimiter = createLimiter(
+  60 * 60 * 1000, 20,
+  'You’ve sent a lot of messages. Please try again in an hour.'
+);
+
+module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter, widgetMessageLimiter };

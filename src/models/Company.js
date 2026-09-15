@@ -91,6 +91,23 @@ const companySchema = new mongoose.Schema({
     showOutOfStock: { type: Boolean, default: true },
     allowBackorders: { type: Boolean, default: false },
   },
+
+  // ── Embeddable AI chat widget (public, knowledge-base powered) ───────────
+  // Every plan gets it on the company's own store; embedding on an EXTERNAL
+  // website is plan-gated (see widgetController's isExternalEmbed). Domains
+  // are auto-registered the first time a request for that site is seen —
+  // there's no separate "add a domain" admin step.
+  widgetSettings: {
+    widgetEnabled: { type: Boolean, default: true },
+    greeting: { type: String, trim: true, maxlength: 300 },
+    placeholder: { type: String, trim: true, maxlength: 100 },
+    primaryColor: { type: String, trim: true },
+    position: { type: String, enum: ['bottom-right', 'bottom-left'], default: 'bottom-right' },
+    collectEmail: { type: Boolean, default: false },
+    offlineMessage: { type: String, trim: true, maxlength: 300 },
+    humanHandoverEnabled: { type: Boolean, default: true },
+    externalDomains: { type: [String], default: [] },
+  },
 }, { timestamps: true });
 
 companySchema.index({ slug: 1 });

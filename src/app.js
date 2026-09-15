@@ -45,6 +45,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const paymentSettingsRoutes = require('./routes/paymentSettingsRoutes');
 const storefrontRoutes = require('./routes/storefrontRoutes');
+const widgetRoutes = require('./routes/widgetRoutes');
 const portalRoutes = require('./routes/portalRoutes');
 const twoFactorRoutes = require('./routes/twoFactorRoutes');
 const auditRoutes = require('./routes/auditRoutes');
@@ -122,8 +123,25 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Refresh-Token'],
 };
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // ensure preflight is answered for every route
+// The embeddable chat widget's public endpoints are the one deliberate
+// exception to the allow-list above: the entire feature is that a client
+// pastes a <script> tag on THEIR OWN website (any domain, not bislyai.com),
+// so these routes must accept requests from anywhere. No cookies/credentials
+// ever travel on them (anonymous visitors are tracked by a client-generated
+// sessionId, not auth), so an open origin is safe here.
+const isPublicWidgetPath = (req) => /^\/api\/v1\/widget\/[^/]+\/(config|message|history)(\/|$)/.test(req.path);
+app.use((req, res, next) => {
+  if (!isPublicWidgetPath(req)) return next();
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+app.use((req, res, next) => (isPublicWidgetPath(req) ? next() : cors(corsOptions)(req, res, next)));
+app.options('*', (req, res, next) => (isPublicWidgetPath(req) ? res.sendStatus(204) : cors(corsOptions)(req, res, next))); // ensure preflight is answered for every route
 
 // ─── Abuse detection ─────────────────────────────────────────────────────────
 // After CORS so a blocked client still gets a readable JSON 403 instead of an
@@ -213,6 +231,7 @@ app.use(`${API}/whatsapp`, whatsappRoutes);
 app.use(`${API}/payments`, paymentRoutes);
 app.use(`${API}/payment-settings`, paymentSettingsRoutes);
 app.use(`${API}/store`, storefrontRoutes);
+app.use(`${API}/widget`, widgetRoutes);
 app.use(`${API}/messages`, messageRoutes);
 app.use(`${API}/search`, searchRoutes);
 app.use(`${API}/notifications`, notificationRoutes);
