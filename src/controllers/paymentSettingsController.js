@@ -54,11 +54,19 @@ exports.verifyAccount = async (req, res, next) => {
   try {
     const { accountNumber, bankCode } = req.body;
     if (!/^\d{10}$/.test(String(accountNumber || ''))) {
-      return next(new AppError('Enter a valid 10-digit account number.', 400));
+      return next(new AppError('Please enter a valid 10-digit account number.', 400));
     }
     if (!bankCode) return next(new AppError('Select a bank.', 400));
 
-    const r = await paystackAPI('GET', `/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`);
+    let r;
+    try {
+      r = await paystackAPI('GET', `/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`);
+    } catch {
+      // Surface a clear, actionable message instead of Paystack's raw
+      // "Could not resolve account name" wording.
+      return next(new AppError('Account number not found. Please check your account number and try again.', 400));
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -111,6 +119,10 @@ exports.createSubaccount = async (req, res, next) => {
     }
 
     const sub = result.data || {};
+    if (sub.active === false) {
+      return next(new AppError('Bank account could not be verified.', 400));
+    }
+
     if (!company.paymentSettings) company.paymentSettings = {};
     company.paymentSettings.paystackSubaccountCode = sub.subaccount_code || company.paymentSettings.paystackSubaccountCode;
     company.paymentSettings.paystackSubaccountId = sub.id ? String(sub.id) : company.paymentSettings.paystackSubaccountId;
