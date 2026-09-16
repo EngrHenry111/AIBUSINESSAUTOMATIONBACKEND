@@ -43,6 +43,7 @@ async function bootstrap() {
     });
 
     app.set('io', io);
+    global.io = io; // fallback for code paths without req.app access
 
     // Let the WhatsApp service emit real-time events (QR, handovers, messages)
     require('./src/services/whatsappService').setIo(io);

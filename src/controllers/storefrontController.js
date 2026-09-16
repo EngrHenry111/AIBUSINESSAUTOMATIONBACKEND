@@ -221,6 +221,12 @@ exports.verifyStorePayment = async (req, res, next) => {
       return next(new AppError('This payment does not belong to this store.', 400));
     }
 
+    // The webhook is the primary path — this is the backup for when it's
+    // missed entirely (misconfigured webhook URL, Paystack retry exhausted,
+    // etc.). fulfilStorefrontOrder() itself re-checks for an existing order
+    // by reference, so calling it here is safe even if the webhook actually
+    // did fire a moment earlier — no duplicate order is created either way.
+    console.log(`Creating order from verify (webhook missed) — reference ${reference}`);
     const order = await fulfilStorefrontOrder(company, vr.data, { io: req.app.get('io') });
     res.status(200).json({ success: true, data: { order: publicOrder(order) } });
   } catch (err) { next(err); }
@@ -299,9 +305,18 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
     const product = byId.get(String(item.productId));
     if (!product || !product.stock?.trackStock) continue;
     try {
-      const { low } = await applyStockAdjustment(product, -Math.abs(item.quantity), {
+      const { low, newQuantity } = await applyStockAdjustment(product, -Math.abs(item.quantity), {
         reason: 'sale', orderId: order._id, note: `Store order ${order.orderNumber}`,
       });
+      console.log(`Stock after order: ${product.name} = ${newQuantity}`);
+      if (newQuantity < 0) {
+        // Should be structurally impossible — applyStockAdjustment() already
+        // clamps at 0 — but this order's whole point is customer trust, so
+        // it self-heals instead of silently carrying a negative count.
+        product.stock.quantity = 0;
+        await product.save();
+        logger.warn(`Negative stock corrected for ${product.name} after order ${order.orderNumber}`);
+      }
       if (low) anyLow = true;
     } catch (e) { logger.warn(`Store stock adjust failed: ${e.message}`); }
   }
@@ -313,8 +328,16 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
     companyId: company._id, customer: order.customer, amount: total, countsAsOrder: true, date: order.createdAt,
   });
 
-  // Invalidate cached dashboards / notifications
+  // Invalidate cached dashboards / notifications so the owner's next poll
+  // (TopBar polls every 60s) sees this order immediately instead of a stale
+  // result for up to the notifications cache's own 2-minute TTL on top of
+  // that. Notifications for storefront orders aren't a separate persisted
+  // record — getNotifications() already derives a "New Store Order" entry
+  // live from recent Order documents, so once this order exists and the
+  // cache is cleared, it just shows up on the next fetch.
   cache.del(`dashboard_${company._id}`);
+  const teamUserIds = await User.find({ companyId: company._id }).select('_id').lean();
+  teamUserIds.forEach((u) => cache.del(`notifications_${u._id}`));
 
   // Emails
   const owner = await User.findById(company.owner).select('name email');
@@ -323,12 +346,22 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
     emailService.send(storeOrderOwnerEmail(company, order, owner)).catch((e) => logger.warn(`store owner email: ${e.message}`));
   }
 
+  console.log(`Order created: ${order.orderNumber} — ${naira(total)} — io present: ${Boolean(io)}`);
   if (io) {
+    io.to(`company:${company._id}`).emit('order:new', {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      customerName: order.customer?.name || 'A customer',
+      amount: order.total,
+      items: order.items.length,
+      source: 'storefront',
+      message: `New order from ${order.customer?.name || 'a customer'} — ${naira(order.total)}`,
+    });
     io.to(`company:${company._id}`).emit('notification:refresh', { type: 'store_order', orderNumber: order.orderNumber });
     if (anyLow) io.to(`company:${company._id}`).emit('notification:refresh', { type: 'low_stock' });
   }
 
-  logger.info(`Storefront order ${order.orderNumber} fulfilled for company ${company._id} (${naira(total)})`);
+  logger.warn(`Storefront order ${order.orderNumber} fulfilled for company ${company._id} (${naira(total)})`);
   return order;
 }
 exports.fulfilStorefrontOrder = fulfilStorefrontOrder;

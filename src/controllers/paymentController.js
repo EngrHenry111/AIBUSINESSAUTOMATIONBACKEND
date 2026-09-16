@@ -364,21 +364,34 @@ exports.webhook = async (req, res) => {
 
     const payload = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString('utf8')) : req.body;
     const { event, data } = payload;
-    logger.info(`Paystack webhook: ${event}`);
+    // logger.info is dropped in production (level is 'warn' there — see
+    // utils/logger.js), which made every webhook silently invisible in
+    // Render's logs. console.log always prints regardless of log level, so
+    // these diagnostic lines are here specifically to be visible in
+    // production while chasing the "orders don't appear" bug.
+    console.log('Webhook received:', event);
+    console.log('Metadata:', JSON.stringify(data?.metadata));
 
     switch (event) {
       // First charge for a plan-based transaction, or any one-off charge
       case 'charge.success': {
         const { metadata, amount, reference } = data;
+        console.log('Payment successful:', reference);
+        console.log('Metadata type:', metadata?.type);
         if (metadata?.type === 'storefront_order' && metadata?.companyId) {
+          console.log('Processing storefront order...');
           try {
             const company = await Company.findById(metadata.companyId);
-            if (company) {
+            if (!company) {
+              console.log(`Storefront webhook: no company found for id ${metadata.companyId}`);
+            } else {
               const { fulfilStorefrontOrder } = require('./storefrontController');
-              await fulfilStorefrontOrder(company, data, { io: req.app.get('io') });
+              const order = await fulfilStorefrontOrder(company, data, { io: req.app.get('io') });
+              console.log(`Storefront order fulfilled: ${order?.orderNumber} (${reference})`);
             }
           } catch (e) {
-            logger.error(`Storefront webhook fulfilment failed for ${reference}: ${e.message}`);
+            console.log(`Storefront webhook fulfilment FAILED for ${reference}: ${e.message}`);
+            logger.error(`Storefront webhook fulfilment failed for ${reference}: ${e.stack || e.message}`);
           }
         } else if (metadata?.companyId && metadata?.plan) {
           await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100);
