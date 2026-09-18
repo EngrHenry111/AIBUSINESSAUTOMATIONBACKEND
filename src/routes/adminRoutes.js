@@ -37,6 +37,31 @@ router.post('/broadcast', [
   body('message').trim().notEmpty().withMessage('Message is required'),
 ], validate, ctrl.broadcast);
 
+// ── Storefront order backfill (super-admin only, per the router.use guard
+// above) — the scheduled reconciliation job (server.js) only ever scans a
+// rolling 3-hour window, so it can never recover an order paid before that
+// job existed or more than 3 hours before any given run. This runs the same
+// reconciliation logic against a much wider, caller-specified window for a
+// one-off catch-up. `days` defaults to 30 and is capped at 180 to keep a
+// single call bounded on the shared Paystack account's full transaction
+// history; call it again with a different `days` value to cover more.
+// May take a while for a wide window — if the HTTP response times out
+// (Render's proxy has its own limit), the job keeps running server-side
+// regardless; check Render's logs for the "Order reconciliation: created N
+// missing order(s)" line to confirm it finished.
+router.post('/reconcile-orders', async (req, res) => {
+  try {
+    const days = Math.min(180, Math.max(1, Number(req.query.days) || 30));
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+    const { reconcileStorefrontOrders } = require('../utils/orderReconciliation');
+    const summary = await reconcileStorefrontOrders({ from, to, maxPages: 30 });
+    res.json({ success: true, window: { from, to, days }, ...summary });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Email diagnostics (super-admin only, per the router.use guard above) ───
 router.post('/test-email', async (req, res) => {
   try {

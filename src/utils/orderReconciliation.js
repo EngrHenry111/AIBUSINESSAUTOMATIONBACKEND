@@ -31,13 +31,19 @@ const MAX_PAGES = 5; // 5 x 100 = 500 transactions per run, ample for the lookba
  * a resolvable BizlyAI Company for metadata.companyId before anything is
  * touched, so the other project's transactions are always ignored.
  */
-async function reconcileStorefrontOrders() {
-  try {
-    const to = new Date();
-    const from = new Date(to.getTime() - LOOKBACK_MS);
+// `options.from`/`options.to` let a one-off backfill scan much further back
+// than the 15-minute job's default 3-hour rolling window — e.g. to recover
+// orders paid before this reconciliation job even existed. See
+// POST /admin/reconcile-orders?days=90 for how that's triggered.
+async function reconcileStorefrontOrders(options = {}) {
+  const to = options.to || new Date();
+  const from = options.from || new Date(to.getTime() - LOOKBACK_MS);
+  const maxPages = options.maxPages || MAX_PAGES;
+  const summary = { scanned: 0, candidates: 0, created: 0, skipped: 0, createdOrders: [], errors: [] };
 
+  try {
     const transactions = [];
-    for (let page = 1; page <= MAX_PAGES; page += 1) {
+    for (let page = 1; page <= maxPages; page += 1) {
       const r = await paystackAPI(
         'GET',
         `/transaction?status=success&perPage=100&page=${page}&from=${from.toISOString()}&to=${to.toISOString()}`
@@ -46,21 +52,21 @@ async function reconcileStorefrontOrders() {
       transactions.push(...batch);
       if (batch.length < 100) break; // last page
     }
+    summary.scanned = transactions.length;
 
     const candidates = transactions.filter(
       (t) => t.metadata?.type === 'storefront_order' && t.metadata?.companyId
     );
+    summary.candidates = candidates.length;
     if (!candidates.length) {
-      logger.info(`Order reconciliation: ${transactions.length} txns scanned, 0 storefront orders in window`);
-      return;
+      logger.info(`Order reconciliation: ${transactions.length} txns scanned (${from.toISOString()} → ${to.toISOString()}), 0 storefront orders`);
+      return summary;
     }
 
-    let created = 0;
-    let skipped = 0;
     for (const txn of candidates) {
       try {
         const exists = await Order.exists({ paystackReference: txn.reference });
-        if (exists) { skipped += 1; continue; }
+        if (exists) { summary.skipped += 1; continue; }
 
         const company = await Company.findById(txn.metadata.companyId);
         if (!company) {
@@ -72,20 +78,25 @@ async function reconcileStorefrontOrders() {
         // requires paystack utils indirectly) at module-load time.
         const { fulfilStorefrontOrder } = require('../controllers/storefrontController');
         const order = await fulfilStorefrontOrder(company, txn, { io: global.io });
-        created += 1;
+        summary.created += 1;
+        summary.createdOrders.push({ orderNumber: order.orderNumber, reference: txn.reference, companyId: String(company._id), total: order.total });
         console.log(`Order reconciliation: created missing order ${order.orderNumber} for reference ${txn.reference} (company ${company._id})`);
       } catch (e) {
+        summary.errors.push({ reference: txn.reference, message: e.message });
         logger.error(`Order reconciliation failed for reference ${txn.reference}: ${e.stack || e.message}`);
       }
     }
 
-    if (created > 0) {
-      logger.warn(`Order reconciliation: created ${created} missing order(s), ${skipped} already existed (${candidates.length} storefront txns in window)`);
+    if (summary.created > 0) {
+      logger.warn(`Order reconciliation: created ${summary.created} missing order(s), ${summary.skipped} already existed (${candidates.length} storefront txns, window ${from.toISOString()} → ${to.toISOString()})`);
     } else {
       logger.info(`Order reconciliation: ${candidates.length} storefront txns in window, all already had orders`);
     }
+    return summary;
   } catch (err) {
     logger.error('Order reconciliation error:', err.stack || err.message);
+    summary.errors.push({ reference: null, message: err.message });
+    return summary;
   }
 }
 
