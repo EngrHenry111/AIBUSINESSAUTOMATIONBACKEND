@@ -73,6 +73,14 @@ async function bootstrap() {
     setInterval(checkMeetingReminders, 30 * 60 * 1000);
     logger.info('✅ Meeting reminder checker scheduled (runs every 30min)');
 
+    // ── Storefront order reconciliation (safety net) ───────────────────────
+    // Catches any order the webhook AND the customer-return path both missed
+    // by asking Paystack directly for recent successful transactions.
+    const { reconcileStorefrontOrders } = require('./src/utils/orderReconciliation');
+    reconcileStorefrontOrders();
+    setInterval(reconcileStorefrontOrders, 15 * 60 * 1000);
+    logger.info('✅ Storefront order reconciliation scheduled (runs every 15min)');
+
     // Socket.io handlers
     io.on('connection', (socket) => {
       logger.debug(`Socket connected: ${socket.id}`);
