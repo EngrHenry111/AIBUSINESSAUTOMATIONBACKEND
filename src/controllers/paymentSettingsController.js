@@ -44,6 +44,7 @@ exports.getBanks = async (req, res, next) => {
       .map((b) => ({ name: b.name, code: b.code, slug: b.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    console.log('Banks from Paystack:', banks.slice(0, 3)); // sample — confirm `code` is numeric (e.g. "011"), not a name
     cache.set('paystack_banks_ngn', banks, 86400); // 24h
     res.status(200).json({ success: true, data: banks });
   } catch (err) { next(err); }
@@ -81,6 +82,7 @@ exports.verifyAccount = async (req, res, next) => {
 exports.createSubaccount = async (req, res, next) => {
   try {
     const { bankCode, accountNumber, businessName } = req.body;
+    console.log('createSubaccount received bankCode:', bankCode, '(expect a numeric Paystack code like "011", not a bank name)');
     if (!bankCode || !/^\d{10}$/.test(String(accountNumber || ''))) {
       return next(new AppError('Bank and a valid 10-digit account number are required.', 400));
     }
@@ -101,12 +103,36 @@ exports.createSubaccount = async (req, res, next) => {
       bankName = (banks || []).find((b) => b.code === bankCode)?.name || null;
     } catch { /* non-fatal */ }
 
+    // Paystack requires a primary contact on the subaccount to actually
+    // notify/verify the sub-merchant before it will settle money to them —
+    // without one, the subaccount is created and can receive split funds
+    // internally (which is why our own commission cut was always arriving
+    // fine) but sits "Pending"/"Unverified" on Paystack's dashboard forever
+    // and never pays the merchant out. req.user is whoever is setting up
+    // payments (the company owner), so that's who Paystack should contact.
+    const contactFields = {
+      primary_contact_email: req.user.email,
+      primary_contact_name: req.user.name,
+      ...(company.profile?.phone ? { primary_contact_phone: company.profile.phone } : {}),
+    };
+
+    console.log('Creating subaccount with:', {
+      business_name: bizName,
+      settlement_bank: bankCode,
+      account_number: accountNumber,
+      percentage_charge: PLATFORM_COMMISSION,
+      settlement_schedule: 'auto',
+      ...contactFields,
+    });
+
     let result;
     if (company.paymentSettings?.paystackSubaccountCode) {
       // Already has a subaccount — update it instead of creating a duplicate
       result = await paystackAPI('PUT', `/subaccount/${company.paymentSettings.paystackSubaccountCode}`, {
         settlement_bank: bankCode,
         account_number: accountNumber,
+        settlement_schedule: 'auto',
+        ...contactFields,
       });
     } else {
       result = await paystackAPI('POST', '/subaccount', {
@@ -115,8 +141,12 @@ exports.createSubaccount = async (req, res, next) => {
         account_number: accountNumber,
         percentage_charge: PLATFORM_COMMISSION,
         description: `BizlyAI - ${bizName}`,
+        settlement_schedule: 'auto',
+        ...contactFields,
       });
     }
+
+    console.log('Paystack subaccount response:', JSON.stringify(result, null, 2));
 
     const sub = result.data || {};
     if (sub.active === false) {
@@ -177,10 +207,20 @@ exports.updateSubaccount = async (req, res, next) => {
       return next(new AppError('Enter a valid 10-digit account number.', 400));
     }
 
-    const payload = {};
+    // Backfill the primary contact on every update too — this is what lets
+    // Paystack actually notify/verify the sub-merchant, so a subaccount
+    // created before this field existed gets fixed the next time its owner
+    // touches their bank details here.
+    const payload = {
+      primary_contact_email: req.user.email,
+      primary_contact_name: req.user.name,
+      ...(company.profile?.phone ? { primary_contact_phone: company.profile.phone } : {}),
+    };
     if (bankCode) payload.settlement_bank = bankCode;
     if (accountNumber) payload.account_number = accountNumber;
     if (businessName) payload.business_name = businessName;
+
+    console.log('Updating subaccount with:', payload);
 
     let accountName = company.paymentSettings.accountName;
     if (bankCode && accountNumber) {
@@ -188,7 +228,8 @@ exports.updateSubaccount = async (req, res, next) => {
       accountName = resolved.data?.account_name || accountName;
     }
 
-    await paystackAPI('PUT', `/subaccount/${company.paymentSettings.paystackSubaccountCode}`, payload);
+    const updateResult = await paystackAPI('PUT', `/subaccount/${company.paymentSettings.paystackSubaccountCode}`, payload);
+    console.log('Paystack subaccount update response:', JSON.stringify(updateResult, null, 2));
 
     if (bankCode) {
       company.paymentSettings.bankCode = bankCode;
