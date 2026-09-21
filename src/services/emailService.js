@@ -1,33 +1,15 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
+// Render blocks outbound SMTP (port 587/465), which is what was surfacing as
+// ETIMEDOUT on every send there even though the exact same code worked
+// locally. Resend's HTTP API sidesteps that entirely — it's a plain HTTPS
+// POST, which is never blocked the way raw SMTP ports are on most PaaS
+// hosts. Nodemailer/SMTP is gone from this file; every send below goes
+// straight to https://api.resend.com/emails.
+const axios = require('axios');
 const logger = require('../utils/logger');
 
-let transporter = null;
-
-function getTransporter() {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: 'smtp.resend.com',
-      port: 465,
-      secure: true, // true for 465
-      auth: {
-        user: 'resend',
-        pass: process.env.RESEND_API_KEY,
-      },
-      // Nodemailer's defaults (2min connect / 10min socket) are long enough
-      // that a stuck SMTP handshake used to outlast the HTTP request calling
-      // it, surfacing as "Request timeout" on the frontend. Fail fast instead.
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
-    });
-    logger.info('Email transporter initialized with Resend');
-    logger.info('RESEND_API_KEY exists: ' + !!process.env.RESEND_API_KEY);
-  }
-  return transporter;
-}
-
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM = process.env.EMAIL_FROM || 'BizlyAI <noreply@bislyai.com>';
 const BASE_URL = process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5174';
 
@@ -381,48 +363,62 @@ async function sendVerificationEmail(email, name, link) {
 }
 
 // ── Core send function ───────────────────────────────────────────────────
-// No silent bypass here on purpose: an earlier version returned a fake
-// "not-configured" result and skipped the send entirely whenever
-// RESEND_API_KEY looked unset, which is exactly how emails went missing
-// from the Resend dashboard without a single failed-attempt log to show
-// for it. Every call now actually reaches nodemailer/Resend and any
-// failure (bad/missing key, unverified from-domain, etc.) is thrown and
-// logged with the real SMTP error code.
+// No silent bypass on a misconfigured key on purpose — that was the original
+// bug that made emails vanish from the Resend dashboard with zero attempt
+// logged. The one guard below only fires when RESEND_API_KEY is genuinely
+// absent (local dev without it configured); any real failure past that
+// point (bad key, unverified from-domain, Resend API error, network) is
+// always thrown and logged with the real response body.
+//
+// logger.info is dropped outside development (see utils/logger.js — level
+// is 'warn' in production), which would make every one of these send
+// attempts invisible on Render. console.log always prints regardless of
+// level, so the attempt/success lines use it deliberately — this is exactly
+// the kind of visibility gap that made the SMTP timeout hard to diagnose
+// from Render's logs in the first place.
 async function sendEmail({ to, subject, html, text }) {
+  if (!RESEND_API_KEY) {
+    logger.warn('RESEND_API_KEY not set — email skipped');
+    return null;
+  }
+
   try {
-    logger.info(`Attempting to send email to: ${to}`);
-    logger.info(`Subject: ${subject}`);
-    logger.info(`From: ${FROM}`);
-    logger.info(`RESEND_API_KEY: ${process.env.RESEND_API_KEY ? 'SET' : 'NOT SET'}`);
+    console.log(`Attempting to send email to: ${to} | Subject: ${subject} | From: ${FROM}`);
 
-    const transport = getTransporter();
-
-    const result = await transport.sendMail({
-      from: FROM,
-      to,
-      replyTo: 'support@bislyai.com',
-      subject,
-      html,
-      text: text || html.replace(/<[^>]*>/g, ''),
-      // Reduces spam-folder odds: a stable-per-message reference ID plus a
-      // real unsubscribe path are things inbox providers (Gmail, Outlook,
-      // Yahoo) explicitly check for on bulk/transactional senders.
-      headers: {
-        'X-Entity-Ref-ID': new Date().getTime().toString(),
-        'List-Unsubscribe': '<mailto:unsubscribe@bislyai.com>',
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    const response = await axios.post(
+      'https://api.resend.com/emails',
+      {
+        from: FROM,
+        to: Array.isArray(to) ? to : [to],
+        reply_to: 'support@bislyai.com',
+        subject,
+        html,
+        text: text || html?.replace(/<[^>]*>/g, ''),
+        // Reduces spam-folder odds: a stable-per-message reference ID plus a
+        // real unsubscribe path are things inbox providers (Gmail, Outlook,
+        // Yahoo) explicitly check for on bulk/transactional senders.
+        headers: {
+          'X-Entity-Ref-ID': new Date().getTime().toString(),
+          'List-Unsubscribe': '<mailto:unsubscribe@bislyai.com>',
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
       },
-    });
+      {
+        headers: {
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000,
+      }
+    );
 
-    logger.info(`✅ Email sent successfully to ${to}`);
-    logger.info(`Message ID: ${result.messageId}`);
-    return result;
+    console.log(`✅ Email sent to ${to} | ID: ${response.data.id}`);
+    return response.data;
   } catch (err) {
-    let serialized = err.message;
-    try { serialized = JSON.stringify(err); } catch { /* circular error object — message is enough */ }
-    logger.error(`❌ Email failed to ${to}: ${err.message}`);
+    const errorMsg = err.response?.data?.message || err.message;
+    console.log(`❌ Email failed to ${to}: ${errorMsg}`);
+    logger.error(`Email failed to ${to}: ${errorMsg}`);
     logger.error(`Error code: ${err.code}`);
-    logger.error(`Full error: ${serialized}`);
     throw err;
   }
 }
