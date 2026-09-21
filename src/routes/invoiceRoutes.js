@@ -16,12 +16,15 @@ router.use(timeout('30s'));
 router.get('/', ctrl.getInvoices);
 router.post('/', ctrl.createInvoice);
 router.get('/overdue', ctrl.getOverdueInvoices);
+router.get('/recurring', ctrl.getRecurringInvoices);
 router.get('/:id', ctrl.getInvoice);
 router.put('/:id', ctrl.updateInvoice);
 router.delete('/:id', ctrl.deleteInvoice);
 router.post('/:id/draft-reminder', aiLimiter, ctrl.draftReminder);
 router.post('/:id/send-email', ctrl.sendInvoiceEmail);
 router.post('/:id/send-receipt', ctrl.sendPaymentReceipt);
+router.patch('/:id/recurring', ctrl.toggleRecurring);
+router.post('/:id/recurring/generate-now', ctrl.generateRecurringNow);
 
 router.get('/:id/pdf', ctrl.generatePDF);
 

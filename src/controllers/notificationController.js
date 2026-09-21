@@ -29,11 +29,13 @@ exports.getNotifications = async (req, res, next) => {
     const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const in1h = new Date(now.getTime() + 60 * 60 * 1000);
 
-    const [overdueInvoices, todayAppointments, newLeads,
+    const [overdueInvoices, recurringGenerated, todayAppointments, newLeads,
       pendingOrders, unreadMessages, lowStockProducts,
       newMeetings, upcomingMeetings, myActionItems] = await Promise.all([
       Invoice.find({ companyId, status: { $in: ['sent', 'viewed'] }, dueAt: { $lt: now } })
         .select('invoiceNumber customer total dueAt').limit(5),
+      Invoice.find({ companyId, recurringParentId: { $ne: null }, createdAt: { $gte: new Date(now - 48 * 60 * 60 * 1000) } })
+        .select('invoiceNumber customer total currency createdAt').limit(5),
       Appointment.find({ companyId, scheduledAt: { $gte: today, $lt: tomorrow }, status: { $in: ['confirmed', 'pending'] } })
         .select('title customer scheduledAt').limit(5),
       Lead.find({ companyId, createdAt: { $gte: new Date(now - 24 * 60 * 60 * 1000) } })
@@ -59,6 +61,12 @@ exports.getNotifications = async (req, res, next) => {
         title: 'Invoice Overdue',
         message: `Invoice ${inv.invoiceNumber} from ${inv.customer?.name} is overdue`,
         url: '/invoices', time: inv.dueAt,
+      })),
+      ...recurringGenerated.map(inv => ({
+        id: `recur-inv-${inv._id}`, type: 'info',
+        title: 'Recurring Invoice Generated',
+        message: `Invoice ${inv.invoiceNumber} (${inv.currency === 'NGN' ? '₦' : ''}${Number(inv.total || 0).toLocaleString()}) auto-sent to ${inv.customer?.name || 'a customer'}`,
+        url: '/invoices', time: inv.createdAt,
       })),
       ...todayAppointments.map(apt => ({
         id: `apt-${apt._id}`, type: 'info',

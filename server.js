@@ -79,6 +79,19 @@ async function bootstrap() {
     setInterval(checkOverdueInvoices, 24 * 60 * 60 * 1000);
     logger.info('✅ Overdue invoice reminder checker scheduled (runs every 24h)');
 
+    // ── Recurring invoices — generate + send due occurrences daily at 8am ──
+    // Checked hourly rather than via a fixed 24h interval so it actually
+    // fires at a predictable time of day instead of drifting to whatever
+    // minute the server happened to boot at.
+    const { processRecurringInvoices } = require('./src/utils/recurringInvoices');
+    processRecurringInvoices().catch((e) => logger.error(`processRecurringInvoices (startup) failed: ${e.message}`));
+    setInterval(() => {
+      if (new Date().getHours() === 8) {
+        processRecurringInvoices().catch((e) => logger.error(`processRecurringInvoices failed: ${e.message}`));
+      }
+    }, 60 * 60 * 1000);
+    logger.info('✅ Recurring invoice processor scheduled (runs daily at 8am, checked hourly)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.

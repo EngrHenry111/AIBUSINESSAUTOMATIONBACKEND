@@ -55,8 +55,27 @@ exports.createInvoice = async (req, res, next) => {
     const count = await Invoice.countDocuments({ companyId: req.companyId });
     const invoiceNumber = `INV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
 
+    const body = { ...req.body };
+    // This invoice IS occurrence #1 when recurring — the scheduler only
+    // ever generates #2 onward from it as an immutable template. nextDueDate
+    // is when #2 should fire: whatever the client sent (a chosen start
+    // date), or one interval from now if it didn't send one.
+    if (body.isRecurring) {
+      const { addInterval } = require('../utils/recurringInvoices');
+      const rs = body.recurringSettings || {};
+      body.recurringSettings = {
+        interval: rs.interval || 'monthly',
+        nextDueDate: rs.nextDueDate || rs.startDate || addInterval(new Date(), rs.interval || 'monthly'),
+        maxOccurrences: rs.maxOccurrences || undefined,
+        endDate: rs.endDate || undefined,
+        active: true,
+        totalGenerated: 0,
+        consecutiveUnpaid: 0,
+      };
+    }
+
     const invoice = await Invoice.create({
-      ...req.body,
+      ...body,
       companyId: req.companyId,
       invoiceNumber,
       createdBy: req.user._id,
@@ -68,6 +87,97 @@ exports.createInvoice = async (req, res, next) => {
 
     require('../utils/cache').del(`dashboard_${req.companyId}`);
     res.status(201).json({ success: true, data: invoice });
+  } catch (err) { next(err); }
+};
+
+// ── GET /invoices/recurring ─────────────────────────────────────────────
+exports.getRecurringInvoices = async (req, res, next) => {
+  try {
+    const templates = await Invoice.find({ companyId: req.companyId, isRecurring: true })
+      .sort({ 'recurringSettings.nextDueDate': 1 });
+
+    const now = new Date();
+    const data = templates.map((t) => {
+      const rs = t.recurringSettings || {};
+      const ended = Boolean(rs.endDate && rs.endDate < now) || Boolean(rs.maxOccurrences && rs.totalGenerated >= rs.maxOccurrences);
+      const statusLabel = ended ? 'ended' : rs.active ? 'active' : 'paused';
+      return {
+        _id: t._id,
+        invoiceNumber: t.invoiceNumber,
+        customer: t.customer,
+        total: t.total,
+        currency: t.currency,
+        recurringSettings: rs,
+        statusLabel,
+      };
+    });
+    res.status(200).json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /invoices/:id/recurring ───────────────────────────────────────
+// Enable/disable recurring on an invoice entirely, or update the schedule
+// (interval, active/paused, end date, max occurrences) on an existing one.
+exports.toggleRecurring = async (req, res, next) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!invoice) return next(new AppError('Invoice not found.', 404));
+
+    const { isRecurring, active, interval, endDate, maxOccurrences } = req.body;
+
+    if (isRecurring === false) {
+      invoice.isRecurring = false;
+    } else if (isRecurring === true && !invoice.isRecurring) {
+      const { addInterval } = require('../utils/recurringInvoices');
+      invoice.isRecurring = true;
+      invoice.recurringSettings = {
+        interval: interval || 'monthly',
+        nextDueDate: addInterval(new Date(), interval || 'monthly'),
+        active: true, totalGenerated: 0, consecutiveUnpaid: 0,
+      };
+    }
+
+    if (invoice.isRecurring) {
+      const rs = invoice.recurringSettings || {};
+      const resuming = active === true && rs.active === false;
+      if (interval !== undefined) rs.interval = interval;
+      if (endDate !== undefined) rs.endDate = endDate || undefined;
+      if (maxOccurrences !== undefined) rs.maxOccurrences = maxOccurrences || undefined;
+      if (active !== undefined) rs.active = active;
+      // Resuming a paused schedule fires it on the very next scheduler pass
+      // instead of leaving a stale, long-past nextDueDate — and a
+      // deliberate resume is the owner saying the problem's resolved, so
+      // the auto-pause tracking clears too.
+      if (resuming) {
+        rs.nextDueDate = new Date();
+        rs.consecutiveUnpaid = 0;
+        rs.pausedReason = undefined;
+      }
+      invoice.recurringSettings = rs;
+    }
+
+    await invoice.save();
+    res.status(200).json({ success: true, data: invoice });
+  } catch (err) { next(err); }
+};
+
+// ── POST /invoices/:id/recurring/generate-now ───────────────────────────
+exports.generateRecurringNow = async (req, res, next) => {
+  try {
+    const template = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId, isRecurring: true }).populate('companyId');
+    if (!template) return next(new AppError('Recurring invoice template not found.', 404));
+
+    const { generateOneRecurringInvoice } = require('../utils/recurringInvoices');
+    const result = await generateOneRecurringInvoice(template, { force: true });
+
+    if (result.paused) {
+      return next(new AppError(result.reason || 'This schedule was auto-paused instead of generating.', 409));
+    }
+    if (!result.generated) {
+      return next(new AppError(result.reason || 'Could not generate an invoice right now.', 400));
+    }
+
+    res.status(201).json({ success: true, data: result.generated });
   } catch (err) { next(err); }
 };
 
@@ -402,6 +512,41 @@ function receiptEmailHtml(invoice, company) {
 // frontend. The invoice is marked sent immediately; the actual email goes
 // out right after, and any failure is logged (not surfaced as a failed
 // request, since the user already got a success response).
+// Shared by the manual "Send" button AND the recurring-invoice generator —
+// one place that builds the email/SMS and records the sent-reminder trail,
+// so a freshly auto-generated recurring invoice goes out exactly the same
+// way a manually-sent one does. Email is deliberately not awaited (see the
+// comment above sendInvoiceEmail) so a caller's HTTP response, if any,
+// never waits on the Resend round-trip; the recurring scheduler has no
+// response to wait on either way, so this is fire-and-forget there too.
+async function dispatchInvoiceToCustomer(invoice, company) {
+  if (invoice.status === 'draft') invoice.status = 'sent';
+  invoice.sentAt = invoice.sentAt || new Date();
+  invoice.reminders.push({ sentAt: new Date(), method: 'email', aiGenerated: false, messagePreview: 'Invoice sent to customer' });
+  await invoice.save();
+
+  if (invoice.customer?.email) {
+    const html = emailService.baseTemplate(
+      `Invoice ${invoice.invoiceNumber}`,
+      invoiceEmailHtml(invoice, company),
+      { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
+    );
+    emailService.send({
+      to: invoice.customer.email,
+      subject: `Invoice ${invoice.invoiceNumber} from ${company?.companyName || 'BizlyAI'}`,
+      html,
+    })
+      .then(() => logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`))
+      .catch((err) => logger.error(`Invoice email failed for ${invoice.invoiceNumber}: ${err.message}`));
+  }
+
+  if (invoice.customer?.phone && company?.smsSettings?.enabled !== false && company?.smsSettings?.sendInvoiceSMS !== false) {
+    const { sendInvoiceSMS } = require('../services/smsService');
+    sendInvoiceSMS(invoice.customer.phone, invoice.customer.name, invoice.invoiceNumber, invoice.total, company?.companyName).catch(() => {});
+  }
+}
+exports.dispatchInvoiceToCustomer = dispatchInvoiceToCustomer;
+
 exports.sendInvoiceEmail = async (req, res, next) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
@@ -411,30 +556,7 @@ exports.sendInvoiceEmail = async (req, res, next) => {
     }
 
     const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
-    const html = emailService.baseTemplate(
-      `Invoice ${invoice.invoiceNumber}`,
-      invoiceEmailHtml(invoice, company),
-      { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
-    );
-
-    invoice.sentAt = new Date();
-    if (invoice.status === 'draft') invoice.status = 'sent';
-    invoice.reminders.push({ sentAt: new Date(), method: 'email', aiGenerated: false, messagePreview: 'Invoice sent to customer' });
-    await invoice.save();
-
-    // Not awaited on purpose — see comment above.
-    emailService.send({
-      to: invoice.customer.email,
-      subject: `Invoice ${invoice.invoiceNumber} from ${company?.companyName || 'BizlyAI'}`,
-      html,
-    })
-      .then(() => logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`))
-      .catch((err) => logger.error(`Invoice email failed for ${invoice.invoiceNumber}: ${err.message}`));
-
-    if (invoice.customer?.phone && company?.smsSettings?.enabled !== false && company?.smsSettings?.sendInvoiceSMS !== false) {
-      const { sendInvoiceSMS } = require('../services/smsService');
-      sendInvoiceSMS(invoice.customer.phone, invoice.customer.name, invoice.invoiceNumber, invoice.total, company?.companyName).catch(() => {});
-    }
+    await dispatchInvoiceToCustomer(invoice, company);
 
     res.status(200).json({ success: true, message: `Invoice sent to ${invoice.customer.email}`, data: invoice });
   } catch (err) {
