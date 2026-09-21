@@ -62,6 +62,16 @@ router.post('/reconcile-orders', async (req, res) => {
   }
 });
 
+// ── SMS diagnostics (super-admin only, per the router.use guard above) ────
+router.post('/test-sms', async (req, res) => {
+  const { sendSMS } = require('../services/smsService');
+  const result = await sendSMS({
+    to: req.body.phone || '08012345678',
+    message: 'BizlyAI SMS test - working perfectly!',
+  });
+  res.json({ success: !!result, result });
+});
+
 // ── Email diagnostics (super-admin only, per the router.use guard above) ───
 router.post('/test-email', async (req, res) => {
   try {

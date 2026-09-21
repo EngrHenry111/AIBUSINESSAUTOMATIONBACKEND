@@ -18,7 +18,7 @@ const day = (d) => (d ? new Date(d).toLocaleDateString('en-US', { month: 'long',
 
 // Fields needed anywhere a company's own branding/payment details show up
 // on customer-facing output (invoice PDF, invoice/receipt emails, AI drafts).
-const COMPANY_BRANDING_FIELDS = 'companyName logo website profile paymentSettings';
+const COMPANY_BRANDING_FIELDS = 'companyName logo website profile paymentSettings smsSettings';
 
 function bankDetailsBlock(company) {
   const ps = company?.paymentSettings;
@@ -430,6 +430,11 @@ exports.sendInvoiceEmail = async (req, res, next) => {
     })
       .then(() => logger.info(`Invoice ${invoice.invoiceNumber} emailed to ${invoice.customer.email}`))
       .catch((err) => logger.error(`Invoice email failed for ${invoice.invoiceNumber}: ${err.message}`));
+
+    if (invoice.customer?.phone && company?.smsSettings?.enabled !== false && company?.smsSettings?.sendInvoiceSMS !== false) {
+      const { sendInvoiceSMS } = require('../services/smsService');
+      sendInvoiceSMS(invoice.customer.phone, invoice.customer.name, invoice.invoiceNumber, invoice.total, company?.companyName).catch(() => {});
+    }
 
     res.status(200).json({ success: true, message: `Invoice sent to ${invoice.customer.email}`, data: invoice });
   } catch (err) {

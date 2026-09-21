@@ -9,6 +9,7 @@ const { paystackAPI } = require('../utils/paystack');
 const { applyStockAdjustment } = require('./productController');
 const { recordCustomerTransaction } = require('../utils/customerSync');
 const emailService = require('../services/emailService');
+const { sendOrderConfirmationSMS, sendStoreOrderSMS } = require('../services/smsService');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
 
@@ -340,10 +341,19 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
   teamUserIds.forEach((u) => cache.del(`notifications_${u._id}`));
 
   // Emails
-  const owner = await User.findById(company.owner).select('name email');
+  const owner = await User.findById(company.owner).select('name email phone');
   emailService.send(storeOrderCustomerEmail(company, order)).catch((e) => logger.warn(`store customer email: ${e.message}`));
   if (owner?.email) {
     emailService.send(storeOrderOwnerEmail(company, order, owner)).catch((e) => logger.warn(`store owner email: ${e.message}`));
+  }
+
+  // SMS — order confirmation to the customer, new-order alert to the owner
+  const smsOk = company.smsSettings?.enabled !== false;
+  if (smsOk && company.smsSettings?.sendOrderSMS !== false && order.customer?.phone) {
+    sendOrderConfirmationSMS(order.customer.phone, order.customer.name, order.orderNumber, order.total).catch(() => {});
+  }
+  if (smsOk && company.smsSettings?.sendOrderSMS !== false && owner?.phone) {
+    sendStoreOrderSMS(owner.phone, owner.name, order.customer?.name || 'A customer', order.total, company.companyName).catch(() => {});
   }
 
   console.log(`Order created: ${order.orderNumber} — ${naira(total)} — io present: ${Boolean(io)}`);

@@ -7,6 +7,7 @@ const staffSalarySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // optional — a staff member need not have an app login
   name: { type: String, required: true, trim: true, maxlength: 150 },
   email: { type: String, trim: true, lowercase: true },
+  phone: { type: String, trim: true }, // for payslip SMS
   role: { type: String, trim: true, maxlength: 100 },
   department: { type: String, trim: true, maxlength: 100 },
   grossSalary: { type: Number, required: true, min: 0 },

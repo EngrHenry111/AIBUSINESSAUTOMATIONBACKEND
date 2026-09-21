@@ -22,7 +22,7 @@ const meetingSchema = new mongoose.Schema({
   scheduledAt: { type: Date },
   duration: { type: Number },
   participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  externalParticipants: [{ name: String, email: String }],
+  externalParticipants: [{ name: String, email: String, phone: String }],
   transcript: { type: String },
   transcriptFile: { type: String },
   status: { type: String, enum: ['scheduled', 'in_progress', 'completed', 'cancelled'], default: 'scheduled' },

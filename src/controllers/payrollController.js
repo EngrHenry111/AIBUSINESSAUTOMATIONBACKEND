@@ -42,7 +42,7 @@ exports.getStaff = async (req, res, next) => {
 // ── POST /payroll/staff ───────────────────────────────────────────────
 exports.addStaff = async (req, res, next) => {
   try {
-    const { name, email, role, department, grossSalary, bankName, bankCode, accountNumber, accountName, taxRate, pensionRate, otherDeduction, startDate } = req.body;
+    const { name, email, phone, role, department, grossSalary, bankName, bankCode, accountNumber, accountName, taxRate, pensionRate, otherDeduction, startDate } = req.body;
     if (!name?.trim()) return next(new AppError('Staff name is required.', 400));
     if (!(Number(grossSalary) > 0)) return next(new AppError('Gross salary must be greater than zero.', 400));
 
@@ -50,6 +50,7 @@ exports.addStaff = async (req, res, next) => {
       companyId: req.companyId,
       name: name.trim(),
       email: email?.trim(),
+      phone: phone?.trim(),
       role: role?.trim(),
       department: department?.trim(),
       grossSalary: Number(grossSalary),
@@ -68,7 +69,7 @@ exports.addStaff = async (req, res, next) => {
 // ── PUT /payroll/staff/:id ────────────────────────────────────────────
 exports.updateStaff = async (req, res, next) => {
   try {
-    const allowed = ['name', 'email', 'role', 'department', 'grossSalary', 'bankName', 'bankCode', 'accountNumber', 'accountName', 'taxRate', 'pensionRate', 'otherDeduction', 'startDate', 'isActive'];
+    const allowed = ['name', 'email', 'phone', 'role', 'department', 'grossSalary', 'bankName', 'bankCode', 'accountNumber', 'accountName', 'taxRate', 'pensionRate', 'otherDeduction', 'startDate', 'isActive'];
     const set = {};
     for (const key of allowed) if (req.body[key] !== undefined) set[key] = req.body[key];
 
@@ -122,6 +123,7 @@ exports.generatePayroll = async (req, res, next) => {
         staffId: s._id,
         name: s.name,
         email: s.email,
+        phone: s.phone,
         role: s.role,
         grossSalary: s.grossSalary,
         deductions: { tax, pension, other },
@@ -204,6 +206,18 @@ async function recordPayrollExpense(payroll, req) {
   logger.warn(`Payroll marked paid: company ${req.companyId}, ${monthLabel}, expense ${expense._id} recorded`);
 }
 
+// SMS_SHORT_MONTHS matches the exact "Jan"/"Feb" format the task spec's
+// sendPayslipSMS example uses, distinct from MONTH_NAMES' full names used
+// on the payslip HTML and expense title.
+const SMS_SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+async function smsPayslip(smsSettings, payroll, employee) {
+  if (!employee.phone) return;
+  if (smsSettings?.enabled === false || smsSettings?.sendPayrollSMS === false) return;
+  const { sendPayslipSMS } = require('../services/smsService');
+  await sendPayslipSMS(employee.phone, employee.name, SMS_SHORT_MONTHS[payroll.month - 1], payroll.year, employee.netSalary).catch(() => {});
+}
+
 // ── PATCH /payroll/:id/mark-paid ──────────────────────────────────────
 // Marks the ENTIRE payroll (every employee) as paid in one action.
 exports.markAsPaid = async (req, res, next) => {
@@ -221,6 +235,9 @@ exports.markAsPaid = async (req, res, next) => {
     await recordPayrollExpense(payroll, req);
     const monthLabel = `${MONTH_NAMES[payroll.month - 1]} ${payroll.year}`;
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'payroll.mark_paid', description: `${monthLabel} — ${naira(payroll.totalNet)}`, ip: req.ip });
+
+    const company = await Company.findById(req.companyId).select('smsSettings');
+    payroll.employees.forEach((e) => smsPayslip(company?.smsSettings, payroll, e).catch(() => {}));
 
     res.status(200).json({ success: true, data: payroll });
   } catch (err) { next(err); }
@@ -254,6 +271,9 @@ exports.markEmployeePaid = async (req, res, next) => {
 
     if (allPaid) await recordPayrollExpense(payroll, req);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'payroll.employee_paid', description: `${employee.name} — ${naira(employee.netSalary)}`, ip: req.ip });
+
+    const company = await Company.findById(req.companyId).select('smsSettings');
+    smsPayslip(company?.smsSettings, payroll, employee).catch(() => {});
 
     res.status(200).json({ success: true, data: payroll });
   } catch (err) { next(err); }

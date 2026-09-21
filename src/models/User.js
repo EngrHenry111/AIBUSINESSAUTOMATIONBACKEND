@@ -10,6 +10,11 @@ const userSchema = new mongoose.Schema({
     type: String, required: true, lowercase: true, trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Invalid email format'],
   },
+  // Personal phone — used for SMS (welcome message, "new store order" /
+  // "low stock" alerts to the owner, payslip notices to staff). Optional so
+  // it never blocks registration or existing accounts; SMS that needs it
+  // just silently no-ops (see smsService) until it's set in Settings.
+  phone: { type: String, trim: true },
   password: { type: String, required: true, minlength: 8, select: false },
   role: {
     type: String,

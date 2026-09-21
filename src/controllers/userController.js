@@ -23,6 +23,7 @@ exports.updateProfile = async (req, res, next) => {
   try {
     const updates = {};
     if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.phone !== undefined) updates.phone = req.body.phone;
     if (req.body.preferences !== undefined) {
       updates.preferences = typeof req.body.preferences === 'string'
         ? safeJson(req.body.preferences)

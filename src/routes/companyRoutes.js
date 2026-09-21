@@ -11,6 +11,8 @@ router.get('/', ctrl.getCompany);
 router.patch('/', isManager, uploadProductImage.single('logo'), ctrl.updateCompany);
 router.get('/usage', ctrl.getUsage);
 router.patch('/ai-settings', isManager, ctrl.updateAISettings);
+router.patch('/sms-settings', isManager, ctrl.updateSMSSettings);
+router.post('/test-sms', isManager, ctrl.testSMS);
 
 // Storefront management
 router.get('/store', ctrl.getStoreSettings);

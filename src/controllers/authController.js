@@ -30,7 +30,7 @@ const { recordFailedLogin } = require('../utils/suspiciousActivity');
 
 exports.register = async (req, res, next) => {
   try {
-    const { name, email, password, companyName, industry } = req.body;
+    const { name, email, password, companyName, industry, phone } = req.body;
     const existingUser = await User.findOne({ email });
     if (existingUser) return next(new AppError('Email already registered.', 409));
 
@@ -41,7 +41,7 @@ exports.register = async (req, res, next) => {
     // not whether the store URL exists at all.
     const company = await Company.create({ companyName, industry, owner: tempUser._id, storeEnabled: true });
     const user = await User.create({
-      name, email, password, role: 'company_owner',
+      name, email, password, role: 'company_owner', phone,
       companyId: company._id, status: 'active',
     });
     company.owner = user._id;
@@ -54,6 +54,13 @@ exports.register = async (req, res, next) => {
     emailService.sendWelcome(email, name, companyName).catch(err =>
       logger.warn(`Welcome email failed: ${err.message}`)
     );
+
+    // Welcome SMS — same non-blocking treatment; only fires if a phone was
+    // given at signup (the field is optional, see User.phone).
+    if (phone && company.smsSettings?.enabled !== false) {
+      const { sendWelcomeSMS } = require('../services/smsService');
+      sendWelcomeSMS(phone, name, companyName).catch(() => {});
+    }
 
     await writeAuditLog({
       companyId: company._id, userId: user._id,

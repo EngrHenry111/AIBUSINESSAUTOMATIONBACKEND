@@ -252,3 +252,37 @@ exports.updateAISettings = async (req, res, next) => {
     res.status(200).json({ success: true, data: company.settings });
   } catch (err) { next(err); }
 };
+
+// ── PATCH /companies/sms-settings ───────────────────────────────────────
+const SMS_TOGGLE_FIELDS = ['enabled', 'sendInvoiceSMS', 'sendOrderSMS', 'sendPayrollSMS', 'sendLowStockSMS'];
+exports.updateSMSSettings = async (req, res, next) => {
+  try {
+    const updates = {};
+    SMS_TOGGLE_FIELDS.forEach((f) => { if (req.body[f] !== undefined) updates[`smsSettings.${f}`] = Boolean(req.body[f]); });
+
+    const company = await Company.findByIdAndUpdate(req.companyId, updates, { new: true }).select('smsSettings');
+    if (!company) return next(new AppError('Company not found.', 404));
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'company.sms_settings_update', ip: req.ip });
+    res.status(200).json({ success: true, data: company.smsSettings });
+  } catch (err) { next(err); }
+};
+
+// ── POST /companies/test-sms ──────────────────────────────────────────
+// Owner-facing test (any manager+, unlike /admin/test-sms which is
+// super_admin-only and can target an arbitrary number) — sends to the
+// caller's own registered phone unless one is explicitly supplied, so
+// there's no way to use this to blast an arbitrary third-party number.
+exports.testSMS = async (req, res, next) => {
+  try {
+    const phone = req.body.phone || req.user.phone;
+    if (!phone) {
+      return next(new AppError('Add a phone number to your profile first (Settings → Profile).', 400));
+    }
+    const { sendSMS } = require('../services/smsService');
+    const result = await sendSMS({ to: phone, message: 'BizlyAI SMS test — working perfectly! 🎉' });
+    if (!result) {
+      return next(new AppError('SMS could not be sent. Check the phone number, or that SMS is configured on the server.', 502));
+    }
+    res.status(200).json({ success: true, message: `Test SMS sent to ${phone}` });
+  } catch (err) { next(err); }
+};

@@ -73,6 +73,12 @@ async function bootstrap() {
     setInterval(checkMeetingReminders, 30 * 60 * 1000);
     logger.info('✅ Meeting reminder checker scheduled (runs every 30min)');
 
+    // ── Overdue invoice reminders (email + SMS) ────────────────────────────
+    const { checkOverdueInvoices } = require('./src/utils/invoiceReminders');
+    checkOverdueInvoices();
+    setInterval(checkOverdueInvoices, 24 * 60 * 60 * 1000);
+    logger.info('✅ Overdue invoice reminder checker scheduled (runs every 24h)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.

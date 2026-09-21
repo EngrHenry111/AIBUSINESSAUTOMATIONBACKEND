@@ -2,11 +2,13 @@
 
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const Company = require('../models/Company');
 const { runAgent } = require('../services/groqService');
 const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { applyStockAdjustment } = require('./productController');
 const { recordCustomerTransaction } = require('../utils/customerSync');
+const { sendOrderConfirmationSMS, sendOrderDeliveredSMS } = require('../services/smsService');
 
 const RELEASES_STOCK = ['cancelled', 'refunded'];
 
@@ -114,6 +116,18 @@ exports.updateOrder = async (req, res, next) => {
 
     await order.save();
     require('../utils/cache').del(`dashboard_${req.companyId}`);
+
+    if (statusChanged && order.customer?.phone && (newStatus === 'confirmed' || newStatus === 'delivered')) {
+      const company = await Company.findById(req.companyId).select('smsSettings');
+      if (company?.smsSettings?.enabled !== false && company?.smsSettings?.sendOrderSMS !== false) {
+        if (newStatus === 'confirmed') {
+          sendOrderConfirmationSMS(order.customer.phone, order.customer.name, order.orderNumber, order.total).catch(() => {});
+        } else {
+          sendOrderDeliveredSMS(order.customer.phone, order.customer.name, order.orderNumber).catch(() => {});
+        }
+      }
+    }
+
     res.status(200).json({ success: true, data: order });
   } catch (err) { next(err); }
 };

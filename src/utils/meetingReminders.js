@@ -5,17 +5,24 @@
 // same pattern as utils/subscriptionChecker.js).
 const Meeting = require('../models/Meeting');
 const User = require('../models/User');
+const Company = require('../models/Company');
 const emailService = require('../services/emailService');
+const { sendSMS } = require('../services/smsService');
 const logger = require('./logger');
 
 async function attendeeList(meeting) {
+  // Internal participants are real Users, who may have a personal phone
+  // (User.phone). externalParticipants currently has no UI to capture a
+  // phone number, so `p.phone` is always undefined for them today — carried
+  // through anyway so SMS starts working the moment that field is ever
+  // populated (API or a future UI), with no further change needed here.
   const users = meeting.participants?.length
-    ? await User.find({ _id: { $in: meeting.participants } }).select('name email')
+    ? await User.find({ _id: { $in: meeting.participants } }).select('name email phone')
     : [];
-  const external = (meeting.externalParticipants || []).filter((p) => p.email);
+  const external = (meeting.externalParticipants || []).filter((p) => p.email || p.phone);
   return [
-    ...users.map((u) => ({ name: u.name, email: u.email })),
-    ...external.map((p) => ({ name: p.name, email: p.email })),
+    ...users.map((u) => ({ name: u.name, email: u.email, phone: u.phone })),
+    ...external.map((p) => ({ name: p.name, email: p.email, phone: p.phone })),
   ];
 }
 
@@ -23,10 +30,24 @@ async function sendReminderBatch(meetings, when) {
   for (const meeting of meetings) {
     // eslint-disable-next-line no-await-in-loop
     const attendees = await attendeeList(meeting);
+    // eslint-disable-next-line no-await-in-loop
+    const company = await Company.findById(meeting.companyId).select('smsSettings');
+    const smsOk = company?.smsSettings?.enabled !== false;
+
     for (const a of attendees) {
-      // eslint-disable-next-line no-await-in-loop
-      await emailService.sendMeetingReminder(a.email, a.name, meeting, when)
-        .catch((e) => logger.warn(`Meeting reminder (${when}) to ${a.email} failed: ${e.message}`));
+      if (a.email) {
+        // eslint-disable-next-line no-await-in-loop
+        await emailService.sendMeetingReminder(a.email, a.name, meeting, when)
+          .catch((e) => logger.warn(`Meeting reminder (${when}) to ${a.email} failed: ${e.message}`));
+      }
+      if (a.phone && smsOk) {
+        const whenLabel = when === '24h' ? 'tomorrow' : 'in 1 hour';
+        // eslint-disable-next-line no-await-in-loop
+        await sendSMS({
+          to: a.phone,
+          message: `Hi ${a.name}, reminder: "${meeting.title}" starts ${whenLabel} (${new Date(meeting.scheduledAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}). - BizlyAI`,
+        }).catch(() => {});
+      }
     }
     if (when === '24h') meeting.reminders.sent24h = true;
     else meeting.reminders.sent1h = true;

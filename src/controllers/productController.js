@@ -18,9 +18,24 @@ function isLow(p) {
   return p.stock?.trackStock && p.stock.quantity <= (p.stock.lowStockThreshold ?? 5);
 }
 
+// Fire once, at the moment stock crosses INTO the low threshold — not on
+// every subsequent sale of an already-low item, which would spam the owner.
+async function notifyLowStock(product) {
+  try {
+    const Company = require('../models/Company');
+    const User = require('../models/User');
+    const { sendLowStockSMS } = require('../services/smsService');
+    const company = await Company.findById(product.companyId).select('owner smsSettings');
+    if (!company || company.smsSettings?.enabled === false || company.smsSettings?.sendLowStockSMS === false) return;
+    const owner = await User.findById(company.owner).select('name phone');
+    if (owner?.phone) await sendLowStockSMS(owner.phone, owner.name, product.name, product.stock.quantity);
+  } catch (e) { logger.warn(`Low stock SMS failed: ${e.message}`); }
+}
+
 // ── Shared: apply a stock delta, log it, keep status in sync ─────────────
 async function applyStockAdjustment(product, adjustment, opts = {}) {
   const prev = product.stock.quantity;
+  const wasLow = isLow(product);
   const next = Math.max(0, prev + Number(adjustment || 0));
   product.stock.quantity = next;
   if (opts.reason === 'sale' && adjustment < 0) product.sold = (product.sold || 0) + Math.abs(adjustment);
@@ -40,7 +55,9 @@ async function applyStockAdjustment(product, adjustment, opts = {}) {
   });
 
   cache.del(`dashboard_${product.companyId}`);
-  return { previousQuantity: prev, newQuantity: next, low: isLow(product) };
+  const low = isLow(product);
+  if (low && !wasLow) notifyLowStock(product);
+  return { previousQuantity: prev, newQuantity: next, low };
 }
 exports.applyStockAdjustment = applyStockAdjustment;
 

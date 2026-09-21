@@ -7,6 +7,7 @@ const payrollEmployeeSchema = new mongoose.Schema({
   staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffSalary' },
   name: { type: String, required: true },
   email: { type: String },
+  phone: { type: String }, // snapshotted from StaffSalary at generation time, for payslip SMS
   role: { type: String },
   grossSalary: { type: Number, required: true, min: 0 },
   deductions: {

@@ -108,6 +108,15 @@ const companySchema = new mongoose.Schema({
     humanHandoverEnabled: { type: Boolean, default: true },
     externalDomains: { type: [String], default: [] },
   },
+
+  // ── SMS notifications (Termii) ────────────────────────────────────────────
+  smsSettings: {
+    enabled: { type: Boolean, default: true },
+    sendInvoiceSMS: { type: Boolean, default: true },
+    sendOrderSMS: { type: Boolean, default: true },
+    sendPayrollSMS: { type: Boolean, default: true },
+    sendLowStockSMS: { type: Boolean, default: true },
+  },
 }, { timestamps: true });
 
 companySchema.index({ slug: 1 });
