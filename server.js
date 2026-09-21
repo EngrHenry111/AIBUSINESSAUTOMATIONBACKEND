@@ -92,6 +92,16 @@ async function bootstrap() {
     }, 60 * 60 * 1000);
     logger.info('✅ Recurring invoice processor scheduled (runs daily at 8am, checked hourly)');
 
+    // ── Loyalty points expiry — sweep stale points daily at 3am ─────────────
+    const { expireOldPoints } = require('./src/utils/loyaltyPoints');
+    expireOldPoints().catch((e) => logger.error(`expireOldPoints (startup) failed: ${e.message}`));
+    setInterval(() => {
+      if (new Date().getHours() === 3) {
+        expireOldPoints().catch((e) => logger.error(`expireOldPoints failed: ${e.message}`));
+      }
+    }, 60 * 60 * 1000);
+    logger.info('✅ Loyalty points expiry sweep scheduled (runs daily at 3am, checked hourly)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.

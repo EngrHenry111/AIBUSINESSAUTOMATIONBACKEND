@@ -15,6 +15,7 @@ router.use(publicStoreLimiter);
 router.get('/:slug', ctrl.getStore);
 router.get('/:slug/products', ctrl.getStoreProducts);
 router.get('/:slug/categories', ctrl.getStoreCategories);
+router.get('/:slug/loyalty', ctrl.getStoreLoyaltyStatus);
 router.post('/:slug/checkout', ctrl.initializeStorePayment);
 router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
 

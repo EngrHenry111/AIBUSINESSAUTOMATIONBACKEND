@@ -12,6 +12,9 @@ const emailService = require('../services/emailService');
 const { sendOrderConfirmationSMS, sendStoreOrderSMS } = require('../services/smsService');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
+const LoyaltyProgram = require('../models/LoyaltyProgram');
+const CustomerPoints = require('../models/CustomerPoints');
+const { awardPointsToCustomer, deductPointsFromCustomer } = require('../utils/loyaltyPoints');
 
 const clientUrl = () =>
   (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -135,11 +138,39 @@ exports.getStoreCategories = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── GET /store/:slug/loyalty?email= ─────────────────────────────────
+// Public — lets the checkout page show "You have N points" before the
+// customer pays. No auth; only ever returns this one shopper's own balance.
+exports.getStoreLoyaltyStatus = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const email = String(req.query.email || '').trim().toLowerCase();
+    const program = await LoyaltyProgram.findOne({ companyId: company._id });
+
+    if (!program?.enabled || !email) {
+      return res.status(200).json({ success: true, data: { enabled: false, points: 0 } });
+    }
+
+    const record = await CustomerPoints.findOne({ companyId: company._id, customerEmail: email });
+    const points = record?.currentPoints || 0;
+    res.status(200).json({
+      success: true,
+      data: {
+        enabled: true,
+        points,
+        nairaPerPoint: program.nairaPerPoint,
+        minimumRedemption: program.minimumRedemption,
+        redeemableValue: points >= program.minimumRedemption ? Math.round(points * program.nairaPerPoint * 100) / 100 : 0,
+      },
+    });
+  } catch (err) { next(err); }
+};
+
 // ── POST /store/:slug/checkout ─────────────────────────────────────
 exports.initializeStorePayment = async (req, res, next) => {
   try {
     const company = await findStore(req.params.slug, { requirePayments: true });
-    const { items = [], customer = {} } = req.body;
+    const { items = [], customer = {}, redeemPoints = 0 } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) return next(new AppError('Your cart is empty.', 400));
     if (!customer.name || !customer.email || !customer.phone) {
@@ -165,6 +196,24 @@ exports.initializeStorePayment = async (req, res, next) => {
     }
     if (total <= 0) return next(new AppError('Order total must be greater than zero.', 400));
 
+    // Loyalty redemption — re-validate server-side against the customer's
+    // real balance rather than trusting the discount the client computed.
+    let loyaltyRedeemed = null;
+    const requestedPoints = Math.max(0, parseInt(redeemPoints, 10) || 0);
+    if (requestedPoints > 0) {
+      const program = await LoyaltyProgram.findOne({ companyId: company._id });
+      const email = String(customer.email).trim().toLowerCase();
+      const record = program?.enabled ? await CustomerPoints.findOne({ companyId: company._id, customerEmail: email }) : null;
+
+      if (program?.enabled && record && requestedPoints >= program.minimumRedemption && record.currentPoints >= requestedPoints) {
+        const discount = Math.min(total - 1, Math.round(requestedPoints * program.nairaPerPoint * 100) / 100);
+        if (discount > 0) {
+          total -= discount;
+          loyaltyRedeemed = { points: requestedPoints, discount };
+        }
+      }
+    }
+
     const initRes = await paystackAPI('POST', '/transaction/initialize', {
       email: customer.email,
       amount: Math.round(total * 100),
@@ -177,6 +226,7 @@ exports.initializeStorePayment = async (req, res, next) => {
         companyId: String(company._id),
         slug: company.storeSlug,
         items: lineItems,
+        loyaltyRedeemed,
         customer: {
           name: String(customer.name).slice(0, 120),
           email: customer.email,
@@ -197,6 +247,7 @@ exports.initializeStorePayment = async (req, res, next) => {
         accessCode: initRes.data.access_code,
         reference: initRes.data.reference,
         total,
+        loyaltyRedeemed,
       },
     });
   } catch (err) { next(err); }
@@ -328,6 +379,14 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
   await recordCustomerTransaction({
     companyId: company._id, customer: order.customer, amount: total, countsAsOrder: true, date: order.createdAt,
   });
+
+  // Loyalty points spent at checkout — only deducted now that payment has
+  // actually succeeded, never at initialization time.
+  if (meta.loyaltyRedeemed?.points > 0) {
+    await deductPointsFromCustomer(company._id, order.customer, meta.loyaltyRedeemed.points, {
+      description: `Redeemed at checkout — order ${order.orderNumber}`, orderId: order._id,
+    });
+  }
 
   // Invalidate cached dashboards / notifications so the owner's next poll
   // (TopBar polls every 60s) sees this order immediately instead of a stale

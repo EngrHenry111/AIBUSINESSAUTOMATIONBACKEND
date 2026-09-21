@@ -8,7 +8,30 @@ const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { applyStockAdjustment } = require('./productController');
 const { recordCustomerTransaction } = require('../utils/customerSync');
-const { sendOrderConfirmationSMS, sendOrderDeliveredSMS } = require('../services/smsService');
+const { sendOrderConfirmationSMS, sendOrderDeliveredSMS, sendSMS } = require('../services/smsService');
+const LoyaltyProgram = require('../models/LoyaltyProgram');
+const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
+
+// Award loyalty points once an order is delivered, then text the customer
+// their new balance. Never throws — called fire-and-forget from updateOrder.
+async function awardLoyaltyForOrder(order, company) {
+  const loyalty = await LoyaltyProgram.findOne({ companyId: order.companyId });
+  if (!loyalty?.enabled || !order.customer?.email) return;
+
+  const points = Math.floor(order.total * loyalty.pointsPerNaira);
+  if (points <= 0) return;
+
+  const record = await awardPointsToCustomer(order.companyId, order.customer, points, {
+    description: `Order ${order.orderNumber}`, orderId: order._id, type: 'earned',
+  });
+  if (!record || !order.customer.phone) return;
+
+  const storeLink = company?.storeSlug ? `bislyai.com/store/${company.storeSlug}` : 'our store';
+  sendSMS({
+    to: order.customer.phone,
+    message: `Hi ${order.customer.name}, you earned ${points} points on your order! Total: ${record.currentPoints} points. Redeem at ${storeLink}. - ${company?.companyName || ''}`.trim(),
+  }).catch(() => {});
+}
 
 const RELEASES_STOCK = ['cancelled', 'refunded'];
 
@@ -117,14 +140,17 @@ exports.updateOrder = async (req, res, next) => {
     await order.save();
     require('../utils/cache').del(`dashboard_${req.companyId}`);
 
-    if (statusChanged && order.customer?.phone && (newStatus === 'confirmed' || newStatus === 'delivered')) {
-      const company = await Company.findById(req.companyId).select('smsSettings');
-      if (company?.smsSettings?.enabled !== false && company?.smsSettings?.sendOrderSMS !== false) {
+    if (statusChanged && (newStatus === 'confirmed' || newStatus === 'delivered')) {
+      const company = await Company.findById(req.companyId).select('smsSettings storeSlug companyName');
+      if (order.customer?.phone && company?.smsSettings?.enabled !== false && company?.smsSettings?.sendOrderSMS !== false) {
         if (newStatus === 'confirmed') {
           sendOrderConfirmationSMS(order.customer.phone, order.customer.name, order.orderNumber, order.total).catch(() => {});
         } else {
           sendOrderDeliveredSMS(order.customer.phone, order.customer.name, order.orderNumber).catch(() => {});
         }
+      }
+      if (newStatus === 'delivered') {
+        awardLoyaltyForOrder(order, company).catch(() => {});
       }
     }
 

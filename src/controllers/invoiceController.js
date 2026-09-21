@@ -8,6 +8,34 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { recordCustomerTransaction } = require('../utils/customerSync');
 const { cleanAIText } = require('../utils/cleanAIText');
 const logger = require('../utils/logger');
+const LoyaltyProgram = require('../models/LoyaltyProgram');
+const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
+const { sendSMS } = require('../services/smsService');
+
+// Award loyalty points once an invoice is marked paid, then text the
+// customer their new balance. Never throws — fire-and-forget from
+// updateInvoice(). Points are Naira-denominated, so skip non-NGN invoices
+// rather than awarding points against a USD/other-currency total.
+async function awardLoyaltyForInvoice(invoice, companyId) {
+  if (invoice.currency && invoice.currency !== 'NGN') return;
+  const loyalty = await LoyaltyProgram.findOne({ companyId });
+  if (!loyalty?.enabled || !invoice.customer?.email) return;
+
+  const points = Math.floor(invoice.total * loyalty.pointsPerNaira);
+  if (points <= 0) return;
+
+  const record = await awardPointsToCustomer(companyId, invoice.customer, points, {
+    description: `Invoice ${invoice.invoiceNumber}`, invoiceId: invoice._id, type: 'earned',
+  });
+  if (!record || !invoice.customer.phone) return;
+
+  const company = await Company.findById(companyId).select('storeSlug companyName');
+  const storeLink = company?.storeSlug ? `bislyai.com/store/${company.storeSlug}` : 'our store';
+  sendSMS({
+    to: invoice.customer.phone,
+    message: `Hi ${invoice.customer.name}, you earned ${points} points on invoice ${invoice.invoiceNumber}! Total: ${record.currentPoints} points. Redeem at ${storeLink}. - ${company?.companyName || ''}`.trim(),
+  }).catch(() => {});
+}
 
 const clientUrl = () =>
   (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -191,11 +219,18 @@ exports.getInvoice = async (req, res, next) => {
 
 exports.updateInvoice = async (req, res, next) => {
   try {
+    const before = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId }).select('status');
+    if (!before) return next(new AppError('Invoice not found.', 404));
+    const justPaid = req.body.status === 'paid' && before.status !== 'paid';
+
     const invoice = await Invoice.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
       req.body, { new: true, runValidators: true }
     );
     if (!invoice) return next(new AppError('Invoice not found.', 404));
+
+    if (justPaid) awardLoyaltyForInvoice(invoice, req.companyId).catch(() => {});
+
     res.status(200).json({ success: true, data: invoice });
   } catch (err) { next(err); }
 };
