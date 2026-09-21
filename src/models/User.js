@@ -53,17 +53,94 @@ const userSchema = new mongoose.Schema({
       browser: { type: Boolean, default: true },
     },
   },
+
+  // ── Digital business card (bislyai.com/card/username) ─────────────────
+  cardSettings: {
+    enabled: { type: Boolean, default: true },
+    username: { type: String, trim: true, lowercase: true }, // globally unique, auto-generated
+    tagline: { type: String, trim: true, maxlength: 150 },
+    bio: { type: String, trim: true, maxlength: 500 },
+    primaryColor: { type: String, default: '#6366f1' },
+    template: { type: String, enum: ['modern', 'minimal', 'bold', 'elegant'], default: 'modern' },
+    links: [{
+      type: { type: String, enum: ['website', 'whatsapp', 'instagram', 'twitter', 'linkedin', 'facebook', 'youtube', 'tiktok', 'email', 'phone', 'custom'] },
+      label: String,
+      url: String,
+      icon: String,
+    }],
+    showEmail: { type: Boolean, default: true },
+    showPhone: { type: Boolean, default: true },
+    views: { type: Number, default: 0 },
+    saves: { type: Number, default: 0 },
+  },
 }, { timestamps: true });
 
 userSchema.index({ companyId: 1, role: 1 });
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ companyId: 1, status: 1 });
+// Globally unique (not per-company) — the card URL is bislyai.com/card/username
+// with no company in the path, so two different companies' users can never
+// collide on the same handle.
+userSchema.index({ 'cardSettings.username': 1 }, { unique: true, sparse: true });
 
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
+
+// "Henry Akpan" -> "henry.akpan"
+const slugifyUsername = (s) => String(s || '')
+  .normalize('NFKD')
+  .replace(/[̀-ͯ]/g, '') // strip combining diacritics
+  .toLowerCase()
+  .trim()
+  .replace(/\s+/g, '.')
+  .replace(/[^a-z0-9.]/g, '')
+  .replace(/\.+/g, '.')
+  .replace(/^\.+|\.+$/g, '');
+
+const rand3 = () => String(Math.floor(Math.random() * 900) + 100); // 100-999, matches the "name123" look
+
+/**
+ * A card username from `name` that no other user has. Collisions get a
+ * fresh random 3-digit suffix (never the SAME suffix retried, unlike a bare
+ * `Math.random()*999` computed once — that has real collision odds once a
+ * handful of people share a first+last name).
+ */
+async function generateCardUsername(name, excludeId) {
+  const Model = this;
+  const base = slugifyUsername(name) || 'user';
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const candidate = `${base}${rand3()}`;
+    // eslint-disable-next-line no-await-in-loop
+    const clash = await Model.exists({
+      'cardSettings.username': candidate,
+      ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    });
+    if (!clash) return candidate;
+  }
+  return `${base}${Date.now().toString(36)}`; // extremely unlikely fallback
+}
+
+// Auto-generate a card username for every user, on every creation path —
+// register(), team invites, Google OAuth — not just one controller. Only
+// ever assigned when empty, same "never reassign" guarantee Company.storeSlug
+// already relies on elsewhere in this codebase.
+userSchema.pre('save', async function (next) {
+  try {
+    if (!this.cardSettings) this.cardSettings = {};
+    if (!this.cardSettings.username && this.name) {
+      this.cardSettings.username = await generateCardUsername.call(this.constructor, this.name, this._id);
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+userSchema.statics.slugifyUsername = slugifyUsername;
+userSchema.statics.generateCardUsername = generateCardUsername;
 
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
