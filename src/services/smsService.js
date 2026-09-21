@@ -4,7 +4,17 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 const TERMII_API_KEY = process.env.TERMII_API_KEY;
-const TERMII_SENDER_ID = process.env.TERMII_SENDER_ID || 'N-Alert';
+// Termii is rejecting every sender ID tried on this workspace so far
+// ('generic', 'terminus') — 'talert' is a Termii-provided shared/pre-approved
+// ID that doesn't need per-workspace registration, used as the default here
+// so SMS keeps working out of the box. Still overridable via env once a real
+// registered sender ID (e.g. "BizlyAI") is approved for this account,
+// without needing another code change.
+const TERMII_SENDER_ID = process.env.TERMII_SENDER_ID || 'talert';
+// 'dnd' (Do-Not-Disturb bypass) requires a use-case Termii approves per
+// workspace; 'generic' doesn't, so it's the safer default while sender-ID/
+// channel approval is still being sorted out for this account.
+const TERMII_CHANNEL = process.env.TERMII_CHANNEL || 'generic';
 const TERMII_BASE = 'https://api.ng.termii.com/api';
 
 function formatNigerianPhone(phone) {
@@ -36,17 +46,21 @@ async function sendSMS({ to, message }) {
       from: TERMII_SENDER_ID,
       sms: message,
       type: 'plain',
-      channel: 'dnd',
+      channel: TERMII_CHANNEL,
       api_key: TERMII_API_KEY,
     });
 
-    // logger.info is dropped outside development (see utils/logger.js) —
-    // warn so a successful send is still visible in production logs, same
-    // reasoning as the storefront-order webhook fix.
-    logger.warn(`✅ SMS sent to ${phone}: ${response.data?.message_id || '(no message_id returned)'}`);
+    // console.log (not logger.info) so this is visible on Render regardless
+    // of log level — same reasoning as the storefront-order webhook and
+    // emailService fixes. Logging the full response, not just message_id,
+    // since Termii can 200 back a rejection reason in the body rather than
+    // an HTTP error status.
+    console.log(`✅ SMS sent to ${phone}:`, response.data);
     return response.data;
   } catch (err) {
-    logger.error(`❌ SMS failed to ${phone}: ${err.response?.data?.message || err.message}`);
+    const errorMsg = err.response?.data?.message || err.message;
+    console.error(`❌ SMS failed to ${phone}:`, errorMsg);
+    console.error('Full SMS error:', JSON.stringify(err.response?.data));
     return null; // Never throw — SMS failure shouldn't break the calling flow
   }
 }
