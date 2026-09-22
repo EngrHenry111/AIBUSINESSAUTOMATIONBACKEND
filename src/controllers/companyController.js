@@ -133,6 +133,15 @@ exports.getStoreSettings = async (req, res, next) => {
           podEnabled: Boolean(d.podEnabled),
           podMaxAmount: d.podMaxAmount ?? 50000,
         },
+        marketplace: {
+          category: company.marketplace?.category || 'Other',
+          location: company.marketplace?.location || '',
+          tags: company.marketplace?.tags || [],
+          // Verified/featured are platform-granted, not self-service — shown
+          // read-only here, never settable via this endpoint.
+          isVerified: Boolean(company.marketplace?.isVerified),
+          isFeatured: Boolean(company.marketplace?.isFeatured),
+        },
       },
     });
   } catch (err) { next(err); }
@@ -145,7 +154,7 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (!company) return next(new AppError('Company not found.', 404));
 
     const { storeSlug, storeEnabled, description, announcement, banner,
-      primaryColor, showOutOfStock, allowBackorders, deliverySettings } = req.body;
+      primaryColor, showOutOfStock, allowBackorders, deliverySettings, marketplace } = req.body;
 
     if (storeSlug !== undefined) {
       const slug = String(storeSlug).toLowerCase().trim();
@@ -189,6 +198,17 @@ exports.updateStoreSettings = async (req, res, next) => {
       if (ds.podMaxAmount !== undefined) company.deliverySettings.podMaxAmount = Number(ds.podMaxAmount) || 0;
     }
 
+    if (marketplace && typeof marketplace === 'object') {
+      if (!company.marketplace) company.marketplace = {};
+      const MARKETPLACE_CATEGORIES = ['Fashion', 'Food', 'Electronics', 'Beauty', 'Home', 'Services', 'Agriculture', 'Other'];
+      if (marketplace.category !== undefined && MARKETPLACE_CATEGORIES.includes(marketplace.category)) {
+        company.marketplace.category = marketplace.category;
+      }
+      if (marketplace.location !== undefined) company.marketplace.location = String(marketplace.location).slice(0, 100);
+      if (Array.isArray(marketplace.tags)) company.marketplace.tags = marketplace.tags.slice(0, 15).map((t) => String(t).slice(0, 30));
+      // isVerified/isFeatured are deliberately not settable here — see getStoreSettings.
+    }
+
     await company.save();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'store.settings_update', ip: req.ip });
 
@@ -202,6 +222,7 @@ exports.updateStoreSettings = async (req, res, next) => {
           ...company.deliverySettings.toObject?.() ?? company.deliverySettings,
           feesByState: company.deliverySettings.feesByState ? Object.fromEntries(company.deliverySettings.feesByState) : {},
         } : null,
+        marketplace: company.marketplace || null,
       },
     });
   } catch (err) {

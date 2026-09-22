@@ -106,6 +106,21 @@ const companySchema = new mongoose.Schema({
     podMaxAmount: { type: Number, default: 50000 },
   },
 
+  // ── Central marketplace listing (auto-listed whenever storeEnabled is
+  // true; removed from browsing the moment the store is disabled — no
+  // separate "listed" flag needed, see marketplaceController). ────────────
+  marketplace: {
+    category: {
+      type: String,
+      enum: ['Fashion', 'Food', 'Electronics', 'Beauty', 'Home', 'Services', 'Agriculture', 'Other'],
+      default: 'Other',
+    },
+    location: { type: String, trim: true }, // e.g. "Lagos"
+    isVerified: { type: Boolean, default: false },
+    isFeatured: { type: Boolean, default: false },
+    tags: { type: [String], default: [] },
+  },
+
   // ── Embeddable AI chat widget (public, knowledge-base powered) ───────────
   // Every plan gets it on the company's own store; embedding on an EXTERNAL
   // website is plan-gated (see widgetController's isExternalEmbed). Domains
@@ -137,6 +152,8 @@ companySchema.index({ slug: 1 });
 companySchema.index({ storeSlug: 1 }, { unique: true, sparse: true });
 companySchema.index({ owner: 1 });
 companySchema.index({ 'subscription.status': 1 });
+companySchema.index({ storeEnabled: 1, 'marketplace.category': 1 });
+companySchema.index({ storeEnabled: 1, 'marketplace.isFeatured': 1 });
 
 // "WebTech Solutions" -> "webtech-solutions"
 const slugify = (s) => String(s || '')

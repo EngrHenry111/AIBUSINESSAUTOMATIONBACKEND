@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const Coupon = require('../models/Coupon');
+const StoreCustomer = require('../models/StoreCustomer');
 const { AppError } = require('../middleware/errorMiddleware');
 const { paystackAPI } = require('../utils/paystack');
 const { applyStockAdjustment } = require('./productController');
@@ -638,6 +639,15 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
     companyId: company._id, customer: order.customer, amount: order.total, countsAsOrder: true, date: order.createdAt,
   });
 
+  // Roll up onto the shopper's store account, if they have one — matched by
+  // email since a guest checkout never carries a StoreCustomer id.
+  if (order.customer?.email) {
+    StoreCustomer.updateOne(
+      { companyId: company._id, email: order.customer.email },
+      { $inc: { orderCount: 1, totalSpent: order.total } },
+    ).catch(() => {});
+  }
+
   if (order.couponCode) {
     Coupon.updateOne({ companyId: company._id, code: order.couponCode }, { $inc: { usedCount: 1 } }).catch(() => {});
   }
@@ -794,6 +804,8 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
   return order;
 }
 exports.fulfilStorefrontOrder = fulfilStorefrontOrder;
+exports.findStore = findStore;
+exports.publicProduct = publicProduct;
 
 // ── Email builders ─────────────────────────────────────────────────
 function orderRows(order) {
