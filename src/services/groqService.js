@@ -86,6 +86,15 @@ Provide:
 - Actionable insights
 - Forecasting where relevant
 Base all analysis on the provided data only.`,
+
+  contract_agent: `You are an expert Nigerian commercial lawyer drafting business contracts.
+Rules:
+- Use precise, professional legal language suitable for Nigerian business law and the Companies and Allied Matters Act (CAMA) 2020.
+- Use ONLY the party names, dates, amounts and terms given to you — never invent details that weren't provided.
+- Number every clause and sub-clause.
+- Default to Nigerian courts and Nigerian law for dispute resolution and governing law unless told otherwise.
+- Write out section headings in capitals on their own line, followed by numbered clauses.
+- This is a first draft for the business to review and have checked by a qualified lawyer before signing — do not claim it has already been legally reviewed.`,
 };
 
 // Every agent gets the plain-text rule appended, once, here — not copy-pasted
@@ -97,7 +106,7 @@ Object.keys(AGENT_PROMPTS).forEach((key) => {
 /**
  * Core completion function
  */
-async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxTokens = 800, stream = false }) {
+async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxTokens = 800, stream = false, reasoningEffort = 'low' }) {
   const groq = getGroqClient();
   try {
     const response = await groq.chat.completions.create({
@@ -106,6 +115,11 @@ async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxT
       max_tokens: maxTokens,
       messages,
       stream,
+      // The openai/gpt-oss-* models spend part of max_tokens on a hidden
+      // reasoning pass before the actual answer — 'low' keeps that overhead
+      // small so existing maxTokens budgets (tuned for the old non-reasoning
+      // model) don't get eaten up and truncate the real output to nothing.
+      ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: reasoningEffort } : {}),
     });
     return response;
   } catch (err) {

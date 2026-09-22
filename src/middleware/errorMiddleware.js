@@ -30,13 +30,21 @@ const handleJWTError = () => new AppError('Invalid token. Please log in again.',
 const handleJWTExpired = () => new AppError('Session expired. Please log in again.', 401);
 
 const sendErrorDev = (err, res) => {
+  // Some errors (Axios errors in particular — err.request/err.response link
+  // back to raw Node HTTP objects) contain circular references that crash
+  // JSON.stringify outright, turning a normal error response into an
+  // unhandled 500 with no body. Dev-only convenience field, so it's fine to
+  // just drop it rather than crash when that happens.
+  let safeError;
+  try { safeError = JSON.parse(JSON.stringify(err)); } catch { safeError = undefined; }
+
   res.status(err.statusCode).json({
     success: false,
     status: err.status,
     message: err.message,
     code: err.code,
     stack: err.stack,
-    error: err,
+    error: safeError,
   });
 };
 
