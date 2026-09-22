@@ -42,6 +42,12 @@ const companySchema = new mongoose.Schema({
     stripeCustomerId: String,
     stripeSubscriptionId: String,
   },
+  // The currency new invoices/orders default to, and which currencies this
+  // company is willing to bill in. Distinct from the legacy, unused
+  // settings.currency below (kept only for backward compatibility).
+  defaultCurrency: { type: String, default: 'NGN' },
+  supportedCurrencies: { type: [String], default: ['NGN'] },
+
   settings: {
     timezone: { type: String, default: 'UTC' },
     currency: { type: String, default: 'USD' },

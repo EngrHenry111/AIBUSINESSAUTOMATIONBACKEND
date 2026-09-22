@@ -21,7 +21,14 @@ const invoiceSchema = new mongoose.Schema({
   tax: { type: Number, default: 0 },
   discount: { type: Number, default: 0 },
   total: { type: Number, required: true },
-  currency: { type: String, default: 'USD' },
+  currency: { type: String, default: 'NGN' },
+  // NGN-per-1-unit rate captured at creation/generation time, and the
+  // resulting NGN value of `total` — lets P&L and dashboard reporting sum
+  // every invoice in one unit regardless of what currency it was issued in.
+  // Both are null for legacy invoices created before multi-currency support;
+  // reporting code falls back to `total` (assumed NGN) when null.
+  exchangeRate: { type: Number, default: null },
+  ngnEquivalent: { type: Number, default: null },
   status: {
     type: String,
     enum: ['draft', 'sent', 'viewed', 'partial', 'paid', 'overdue', 'cancelled'],

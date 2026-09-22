@@ -29,7 +29,7 @@ exports.updateCompany = async (req, res, next) => {
     const company = await Company.findById(req.companyId);
     if (!company) return next(new AppError('Company not found.', 404));
 
-    const allowed = ['companyName', 'industry', 'website', 'settings'];
+    const allowed = ['companyName', 'industry', 'website', 'settings', 'defaultCurrency', 'supportedCurrencies'];
     allowed.forEach((f) => { if (req.body[f] !== undefined) company[f] = req.body[f]; });
 
     // `profile` may arrive as a JSON string (multipart form) or an object

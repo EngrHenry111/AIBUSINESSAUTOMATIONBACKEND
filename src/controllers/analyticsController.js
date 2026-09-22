@@ -42,7 +42,7 @@ exports.getDashboardMetrics = async (req, res, next) => {
       recentActivity,
       productAgg,
       totalCustomers, customersThisMonth,
-      expenseAgg, paidRevenueAgg,
+      expenseAgg, paidRevenueAgg, currencyBreakdownAgg,
     ] = await Promise.all([
       Company.findById(companyId).select('usage limits subscription'),
       Document.countDocuments({ companyId, status: 'ready' }),
@@ -82,7 +82,17 @@ exports.getDashboardMetrics = async (req, res, next) => {
       ]),
       Invoice.aggregate([
         { $match: { companyId, status: 'paid', paidAt: { $gte: startOfMonth } } },
-        { $group: { _id: null, total: { $sum: '$total' } } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
+      ]),
+      Invoice.aggregate([
+        { $match: { companyId, status: 'paid', paidAt: { $gte: startOfMonth } } },
+        { $group: {
+          _id: '$currency',
+          total: { $sum: '$total' },
+          ngnEquivalent: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } },
+          count: { $sum: 1 },
+        } },
+        { $sort: { ngnEquivalent: -1 } },
       ]),
     ]);
 
@@ -133,6 +143,10 @@ exports.getDashboardMetrics = async (req, res, next) => {
         invoices: {
           byStatus: invoiceStats,
           overdue: overdueInvoicesCount,
+          // invoices.byStatus groups don't carry ngnEquivalent (that would
+          // need a separate aggregation), so this stays a raw-total sum —
+          // fine for a single-currency company, an underestimate for a
+          // mixed one. The currency-accurate figure is finance.currencyBreakdown.
           outstanding: invoices
             .filter(i => ['sent', 'viewed', 'partial', 'overdue'].includes(i._id))
             .reduce((s, i) => s + i.total, 0),
@@ -152,6 +166,12 @@ exports.getDashboardMetrics = async (req, res, next) => {
           expensesThisMonth: expenseAgg[0]?.total || 0,
           revenueThisMonth: paidRevenueAgg[0]?.total || 0,
           netProfitThisMonth: (paidRevenueAgg[0]?.total || 0) - (expenseAgg[0]?.total || 0),
+          // Paid invoices this month, grouped by original currency — lets the
+          // dashboard show "USD invoices: $2,300 (≈ ₦3,650,100)" alongside the
+          // NGN-equivalent totals used everywhere else.
+          currencyBreakdown: currencyBreakdownAgg.map((c) => ({
+            currency: c._id || 'NGN', total: c.total, ngnEquivalent: c.ngnEquivalent, count: c.count,
+          })),
         },
         ai: {
           avgConfidence: aiMetrics[0]?.avgConfidence ? Math.round(aiMetrics[0].avgConfidence) : 0,

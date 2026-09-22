@@ -31,7 +31,10 @@ async function revenueBetween(companyId, start, end) {
   const [invAgg, ordAgg] = await Promise.all([
     Invoice.aggregate([
       { $match: { companyId, status: 'paid', paidAt: { $gte: start, $lte: end } } },
-      { $group: { _id: null, total: { $sum: '$total' } } },
+      // ngnEquivalent is set for every invoice created after multi-currency
+      // support shipped; fall back to `total` for older invoices (assumed
+      // NGN, matching the pre-multi-currency behavior).
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
     ]),
     Order.aggregate([
       { $match: { companyId, status: { $nin: CANCELLED_ORDER }, createdAt: { $gte: start, $lte: end } } },

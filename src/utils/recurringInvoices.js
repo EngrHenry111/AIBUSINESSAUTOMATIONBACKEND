@@ -5,6 +5,7 @@ const Company = require('../models/Company');
 const User = require('../models/User');
 const cache = require('./cache');
 const logger = require('./logger');
+const { currencyFieldsFor } = require('../services/currencyService');
 
 const UNPAID_PAUSE_THRESHOLD = 3; // consecutive unpaid cycles before auto-pausing
 
@@ -106,6 +107,12 @@ async function generateOneRecurringInvoice(template, { force = false } = {}) {
   const dueAt = new Date(now);
   dueAt.setDate(dueAt.getDate() + 14); // 14 days to pay, matching the original spec
 
+  // Recompute at today's rate rather than copying the template's original
+  // exchangeRate/ngnEquivalent — a recurring invoice generated months later
+  // should reflect the current rate, same as its total is freshly billed
+  // each cycle rather than frozen from occurrence #1.
+  const { exchangeRate, ngnEquivalent } = await currencyFieldsFor(template.currency, template.total);
+
   let newInvoice;
   try {
     newInvoice = await Invoice.create({
@@ -118,6 +125,8 @@ async function generateOneRecurringInvoice(template, { force = false } = {}) {
       discount: template.discount,
       total: template.total,
       currency: template.currency,
+      exchangeRate,
+      ngnEquivalent,
       notes: template.notes,
       status: 'sent',
       issuedAt: now,
