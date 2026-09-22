@@ -21,7 +21,7 @@ router.get('/:slug/categories', ctrl.getStoreCategories);
 router.get('/:slug/loyalty', ctrl.getStoreLoyaltyStatus);
 router.post('/:slug/coupon/validate', ctrl.validateCoupon);
 router.get('/:slug/track/:orderNumber', ctrl.trackOrder);
-router.post('/:slug/orders/:id/bank-proof', uploadReceipt.single('proof'), ctrl.uploadBankProof);
+router.post('/:slug/orders/:orderNumber/bank-proof', uploadReceipt.single('proof'), ctrl.uploadBankProof);
 router.post('/:slug/checkout', ctrl.initializeStorePayment);
 router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
 

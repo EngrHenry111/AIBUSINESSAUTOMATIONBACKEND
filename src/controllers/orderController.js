@@ -96,9 +96,11 @@ async function releaseOrderStock(order, userId) {
 
 exports.getOrders = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 20, search } = req.query;
+    const { status, source, paymentMethod, page = 1, limit = 20, search } = req.query;
     const filter = { companyId: req.companyId };
     if (status) filter.status = status;
+    if (source) filter.source = source;
+    if (paymentMethod) filter.paymentMethod = paymentMethod;
     if (search) filter.$or = [
       { orderNumber: { $regex: search, $options: 'i' } },
       { 'customer.name': { $regex: search, $options: 'i' } },

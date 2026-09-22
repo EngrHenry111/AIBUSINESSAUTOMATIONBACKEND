@@ -109,6 +109,16 @@ const publicStore = (company) => ({
     website: company.website || null,
     socials: company.profile?.socials || null,
   },
+  // Delivery fees/POD availability are meant to be visible to shoppers before
+  // they check out — never bank account details, which stay owner-only.
+  deliverySettings: {
+    feesByState: company.deliverySettings?.feesByState ? Object.fromEntries(company.deliverySettings.feesByState) : {},
+    defaultFee: company.deliverySettings?.defaultFee ?? 2000,
+    freeDeliveryMinimum: company.deliverySettings?.freeDeliveryMinimum ?? null,
+    estimatedDeliveryDays: company.deliverySettings?.estimatedDeliveryDays ?? 3,
+    podEnabled: Boolean(company.deliverySettings?.podEnabled),
+    podMaxAmount: company.deliverySettings?.podMaxAmount ?? 50000,
+  },
 });
 
 // Which products are visible in a given store
@@ -356,7 +366,9 @@ exports.uploadBankProof = async (req, res, next) => {
     if (!req.file) return next(new AppError('No image received.', 400));
     if (!email) { fs.unlink(req.file.path, () => {}); return next(new AppError('Enter the email used for this order.', 400)); }
 
-    const order = await Order.findOne({ _id: req.params.id, companyId: company._id, 'customer.email': email });
+    // Identified by orderNumber (not _id) — the storefront never learns an
+    // order's internal Mongo id, same as trackOrder().
+    const order = await Order.findOne({ orderNumber: req.params.orderNumber, companyId: company._id, 'customer.email': email });
     if (!order) { fs.unlink(req.file.path, () => {}); return next(new AppError('Order not found.', 404)); }
 
     let url;
