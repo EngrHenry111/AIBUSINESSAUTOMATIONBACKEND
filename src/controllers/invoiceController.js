@@ -22,7 +22,8 @@ async function awardLoyaltyForInvoice(invoice, companyId) {
   const loyalty = await LoyaltyProgram.findOne({ companyId });
   if (!loyalty?.enabled || !invoice.customer?.email) return;
 
-  const points = Math.floor(invoice.total * loyalty.pointsPerNaira);
+  let points = Math.floor(invoice.total * loyalty.pointsPerNaira);
+  if (loyalty.maxPointsPerOrder) points = Math.min(points, loyalty.maxPointsPerOrder);
   if (points <= 0) return;
 
   const record = await awardPointsToCustomer(companyId, invoice.customer, points, {

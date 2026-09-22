@@ -37,8 +37,9 @@ async function awardLoyaltyForOrder(order, company) {
     return false;
   }
 
-  const points = Math.floor(order.total * loyalty.pointsPerNaira);
-  console.log(`[loyalty] Order ${order.orderNumber} — points to award: ${points}`);
+  let points = Math.floor(order.total * loyalty.pointsPerNaira);
+  if (loyalty.maxPointsPerOrder) points = Math.min(points, loyalty.maxPointsPerOrder);
+  console.log(`[loyalty] Order ${order.orderNumber} — points to award: ${points}${loyalty.maxPointsPerOrder ? ` (capped at ${loyalty.maxPointsPerOrder})` : ''}`);
   if (points <= 0) return false;
 
   const record = await awardPointsToCustomer(order.companyId, order.customer, points, {

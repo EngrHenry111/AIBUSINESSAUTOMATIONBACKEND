@@ -17,6 +17,11 @@ const loyaltyProgramSchema = new mongoose.Schema({
   pointsPerNaira: { type: Number, default: 1 }, // 1 point per ₦1 spent
   nairaPerPoint: { type: Number, default: 0.5 }, // ₦0.50 value per point
   minimumRedemption: { type: Number, default: 100 }, // minimum points to redeem
+  // Caps how many points a single order/invoice can earn, regardless of its
+  // total — without this, a high-value B2B order (common on this platform)
+  // can hand out a disproportionate, alarming-looking point windfall even
+  // at a modest points-per-Naira rate. null/undefined = uncapped.
+  maxPointsPerOrder: { type: Number, default: null },
   expiryDays: { type: Number, default: 365 }, // points expire after 1 year
   tiers: { type: [tierSchema], default: [] },
   welcomePoints: { type: Number, default: 50 },

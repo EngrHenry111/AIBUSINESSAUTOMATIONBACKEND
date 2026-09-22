@@ -18,7 +18,7 @@ exports.setupLoyaltyProgram = async (req, res, next) => {
   try {
     const {
       enabled, name, pointsPerNaira, nairaPerPoint, minimumRedemption,
-      expiryDays, tiers, welcomePoints, referralPoints,
+      expiryDays, tiers, welcomePoints, referralPoints, maxPointsPerOrder,
     } = req.body;
 
     let program = await LoyaltyProgram.findOne({ companyId: req.companyId });
@@ -33,6 +33,7 @@ exports.setupLoyaltyProgram = async (req, res, next) => {
     if (pointsPerNaira !== undefined) program.pointsPerNaira = Number(pointsPerNaira);
     if (nairaPerPoint !== undefined) program.nairaPerPoint = Number(nairaPerPoint);
     if (minimumRedemption !== undefined) program.minimumRedemption = Number(minimumRedemption);
+    if (maxPointsPerOrder !== undefined) program.maxPointsPerOrder = maxPointsPerOrder === '' || maxPointsPerOrder == null ? null : Number(maxPointsPerOrder);
     if (expiryDays !== undefined) program.expiryDays = Number(expiryDays);
     if (welcomePoints !== undefined) program.welcomePoints = Number(welcomePoints);
     if (referralPoints !== undefined) program.referralPoints = Number(referralPoints);
