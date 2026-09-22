@@ -72,6 +72,46 @@ router.post('/test-sms', async (req, res) => {
   res.json({ success: !!result, result });
 });
 
+// ── Loyalty points backfill (super-admin only, per the router.use guard
+// above) — for a company that only turned loyalty ON after some of its
+// orders were already delivered: those orders' delivered-status transition
+// happened while LoyaltyProgram.findOne() returned nothing, so the earn
+// hook skipped them by design (see orderController.awardLoyaltyForOrder).
+// This re-runs that exact same function over every delivered order that
+// hasn't been awarded yet, scoped to companies whose program is enabled —
+// it never creates or enables a program on a company's behalf. Safe to call
+// repeatedly: the Order.pointsAwarded flag makes every award idempotent.
+router.post('/migrate-loyalty-points', async (req, res) => {
+  try {
+    const Order = require('../models/Order');
+    const Company = require('../models/Company');
+    const LoyaltyProgram = require('../models/LoyaltyProgram');
+    const { awardLoyaltyForOrder } = require('../controllers/orderController');
+
+    const enabledCompanyIds = (await LoyaltyProgram.find({ enabled: true }).select('companyId')).map((p) => String(p.companyId));
+    if (!enabledCompanyIds.length) {
+      return res.json({ success: true, ordersScanned: 0, awarded: 0, skipped: 0, message: 'No company has an enabled loyalty program.' });
+    }
+
+    const orders = await Order.find({ status: 'delivered', pointsAwarded: { $ne: true }, companyId: { $in: enabledCompanyIds } });
+    const companyCache = new Map();
+    let awarded = 0;
+    for (const order of orders) {
+      const key = String(order.companyId);
+      if (!companyCache.has(key)) {
+        companyCache.set(key, await Company.findById(order.companyId).select('smsSettings storeSlug companyName'));
+      }
+      const didAward = await awardLoyaltyForOrder(order, companyCache.get(key));
+      if (didAward) awarded += 1;
+    }
+
+    console.log(`[loyalty] Migration: scanned ${orders.length} delivered order(s), awarded ${awarded}, skipped ${orders.length - awarded}`);
+    res.json({ success: true, ordersScanned: orders.length, awarded, skipped: orders.length - awarded });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Email diagnostics (super-admin only, per the router.use guard above) ───
 router.post('/test-email', async (req, res) => {
   try {

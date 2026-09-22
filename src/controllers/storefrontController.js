@@ -14,7 +14,8 @@ const cache = require('../utils/cache');
 const logger = require('../utils/logger');
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const CustomerPoints = require('../models/CustomerPoints');
-const { awardPointsToCustomer, deductPointsFromCustomer } = require('../utils/loyaltyPoints');
+const { deductPointsFromCustomer } = require('../utils/loyaltyPoints');
+const { awardLoyaltyForOrder } = require('./orderController');
 
 const clientUrl = () =>
   (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -387,6 +388,13 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
       description: `Redeemed at checkout — order ${order.orderNumber}`, orderId: order._id,
     });
   }
+
+  // Loyalty points earned — storefront orders are already paid at this
+  // point, so they earn immediately rather than waiting for an admin to walk
+  // them to 'delivered' (see orderController.awardLoyaltyForOrder for the
+  // shared award logic + the pointsAwarded guard that keeps this safe even
+  // if the same order later gets marked delivered too).
+  awardLoyaltyForOrder(order, company).catch(() => {});
 
   // Invalidate cached dashboards / notifications so the owner's next poll
   // (TopBar polls every 60s) sees this order immediately instead of a stale

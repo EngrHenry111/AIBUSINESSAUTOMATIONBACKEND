@@ -12,26 +12,54 @@ const { sendOrderConfirmationSMS, sendOrderDeliveredSMS, sendSMS } = require('..
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
 
-// Award loyalty points once an order is delivered, then text the customer
-// their new balance. Never throws — called fire-and-forget from updateOrder.
+// Award loyalty points once an order is delivered (or, for storefront orders,
+// as soon as payment is confirmed), then text the customer their new
+// balance. Never throws — called fire-and-forget from updateOrder(), and
+// also reused directly by the /admin/migrate-loyalty-points backfill.
+// Returns true if points were actually awarded, false otherwise (used by the
+// backfill to report a count) — logged with plain console.log rather than
+// logger.info because Winston drops info-level logs outside development, and
+// this is exactly the trail Render's logs need to show for support/debugging.
 async function awardLoyaltyForOrder(order, company) {
+  console.log(`[loyalty] Order ${order.orderNumber} — checking loyalty. company=${order.companyId} customer=${JSON.stringify(order.customer)} total=${order.total}`);
+
+  if (order.pointsAwarded) {
+    console.log(`[loyalty] Order ${order.orderNumber} — already awarded, skipping.`);
+    return false;
+  }
+
   const loyalty = await LoyaltyProgram.findOne({ companyId: order.companyId });
-  if (!loyalty?.enabled || !order.customer?.email) return;
+  console.log(`[loyalty] Order ${order.orderNumber} — program found: ${!!loyalty}, enabled: ${loyalty?.enabled}`);
+  if (!loyalty?.enabled) return false;
+
+  if (!order.customer?.email) {
+    console.log(`[loyalty] Order ${order.orderNumber} — no customer email, cannot track points. Skipping.`);
+    return false;
+  }
 
   const points = Math.floor(order.total * loyalty.pointsPerNaira);
-  if (points <= 0) return;
+  console.log(`[loyalty] Order ${order.orderNumber} — points to award: ${points}`);
+  if (points <= 0) return false;
 
   const record = await awardPointsToCustomer(order.companyId, order.customer, points, {
     description: `Order ${order.orderNumber}`, orderId: order._id, type: 'earned',
   });
-  if (!record || !order.customer.phone) return;
+  console.log(`[loyalty] Order ${order.orderNumber} — award result: ${record ? `new balance ${record.currentPoints}` : 'FAILED'}`);
+  if (!record) return false;
+
+  await Order.updateOne({ _id: order._id }, { pointsAwarded: true });
+
+  console.log(`[loyalty] Order ${order.orderNumber} — customer phone: ${order.customer.phone || '(none)'}`);
+  if (!order.customer.phone) return true;
 
   const storeLink = company?.storeSlug ? `bislyai.com/store/${company.storeSlug}` : 'our store';
   sendSMS({
     to: order.customer.phone,
     message: `Hi ${order.customer.name}, you earned ${points} points on your order! Total: ${record.currentPoints} points. Redeem at ${storeLink}. - ${company?.companyName || ''}`.trim(),
   }).catch(() => {});
+  return true;
 }
+exports.awardLoyaltyForOrder = awardLoyaltyForOrder;
 
 const RELEASES_STOCK = ['cancelled', 'refunded'];
 
@@ -149,7 +177,13 @@ exports.updateOrder = async (req, res, next) => {
           sendOrderDeliveredSMS(order.customer.phone, order.customer.name, order.orderNumber).catch(() => {});
         }
       }
-      if (newStatus === 'delivered') {
+      // Storefront orders are already paid by the time they hit 'confirmed',
+      // so they earn points immediately rather than waiting on an admin to
+      // walk the order through to 'delivered' (many never get marked that
+      // explicitly). Manual/admin-entered orders still only earn at
+      // delivery. awardLoyaltyForOrder's pointsAwarded guard makes it safe
+      // for the same order to also pass through 'delivered' later.
+      if (newStatus === 'delivered' || (newStatus === 'confirmed' && order.source === 'storefront')) {
         awardLoyaltyForOrder(order, company).catch(() => {});
       }
     }

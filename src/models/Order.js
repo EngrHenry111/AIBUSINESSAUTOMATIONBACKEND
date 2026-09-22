@@ -16,6 +16,11 @@ const orderSchema = new mongoose.Schema({
     sku: String,
   }],
   stockApplied: { type: Boolean, default: false },
+  // Guards loyalty-points awarding against double-crediting — a storefront
+  // order can earn points at 'confirmed' (payment success) and later also
+  // pass through 'delivered'; the retroactive migration endpoint re-runs
+  // over the same orders too. See orderController.awardLoyaltyForOrder.
+  pointsAwarded: { type: Boolean, default: false },
   total: Number,
   currency: { type: String, default: 'USD' },
   status: {
