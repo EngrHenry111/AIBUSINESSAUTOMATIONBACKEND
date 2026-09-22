@@ -29,6 +29,15 @@ function formatNigerianPhone(phone) {
 }
 
 async function sendSMS({ to, message }) {
+  // Kill switch — Termii's sender-ID/channel approval for this workspace has
+  // been unreliable, so SMS defaults OFF (unset or anything but the literal
+  // string 'true' disables it) until that's sorted out. Flip SMS_ENABLED=true
+  // on Render once it's working end-to-end again.
+  if (process.env.SMS_ENABLED !== 'true') {
+    console.log('SMS disabled — skipping:', String(message || '').slice(0, 50));
+    return null;
+  }
+
   if (!TERMII_API_KEY) {
     logger.warn('TERMII_API_KEY not set — SMS skipped');
     return null;
