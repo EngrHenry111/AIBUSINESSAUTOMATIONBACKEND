@@ -97,6 +97,14 @@ const companySchema = new mongoose.Schema({
     showOutOfStock: { type: Boolean, default: true },
     allowBackorders: { type: Boolean, default: false },
   },
+  deliverySettings: {
+    feesByState: { type: Map, of: Number, default: {} }, // e.g. { Lagos: 2000, Abuja: 2500 }
+    defaultFee: { type: Number, default: 2000 }, // used for any state not listed above
+    freeDeliveryMinimum: Number, // order subtotal at/above which delivery is free; null/undefined = no free tier
+    estimatedDeliveryDays: { type: Number, default: 3 },
+    podEnabled: { type: Boolean, default: false },
+    podMaxAmount: { type: Number, default: 50000 },
+  },
 
   // ── Embeddable AI chat widget (public, knowledge-base powered) ───────────
   // Every plan gets it on the company's own store; embedding on an EXTERNAL

@@ -109,6 +109,7 @@ exports.getStoreSettings = async (req, res, next) => {
     if (dirty) await company.save();
 
     const s = company.storeSettings || {};
+    const d = company.deliverySettings || {};
     res.status(200).json({
       success: true,
       data: {
@@ -124,6 +125,14 @@ exports.getStoreSettings = async (req, res, next) => {
           showOutOfStock: s.showOutOfStock !== false,
           allowBackorders: Boolean(s.allowBackorders),
         },
+        deliverySettings: {
+          feesByState: d.feesByState ? Object.fromEntries(d.feesByState) : {},
+          defaultFee: d.defaultFee ?? 2000,
+          freeDeliveryMinimum: d.freeDeliveryMinimum ?? null,
+          estimatedDeliveryDays: d.estimatedDeliveryDays ?? 3,
+          podEnabled: Boolean(d.podEnabled),
+          podMaxAmount: d.podMaxAmount ?? 50000,
+        },
       },
     });
   } catch (err) { next(err); }
@@ -136,7 +145,7 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (!company) return next(new AppError('Company not found.', 404));
 
     const { storeSlug, storeEnabled, description, announcement, banner,
-      primaryColor, showOutOfStock, allowBackorders } = req.body;
+      primaryColor, showOutOfStock, allowBackorders, deliverySettings } = req.body;
 
     if (storeSlug !== undefined) {
       const slug = String(storeSlug).toLowerCase().trim();
@@ -165,10 +174,36 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (showOutOfStock !== undefined) company.storeSettings.showOutOfStock = Boolean(showOutOfStock);
     if (allowBackorders !== undefined) company.storeSettings.allowBackorders = Boolean(allowBackorders);
 
+    if (deliverySettings && typeof deliverySettings === 'object') {
+      if (!company.deliverySettings) company.deliverySettings = {};
+      const ds = deliverySettings;
+      if (ds.feesByState && typeof ds.feesByState === 'object') {
+        company.deliverySettings.feesByState = new Map(
+          Object.entries(ds.feesByState).map(([state, fee]) => [state, Number(fee) || 0])
+        );
+      }
+      if (ds.defaultFee !== undefined) company.deliverySettings.defaultFee = Number(ds.defaultFee) || 0;
+      if (ds.freeDeliveryMinimum !== undefined) company.deliverySettings.freeDeliveryMinimum = ds.freeDeliveryMinimum === '' || ds.freeDeliveryMinimum == null ? null : Number(ds.freeDeliveryMinimum);
+      if (ds.estimatedDeliveryDays !== undefined) company.deliverySettings.estimatedDeliveryDays = Number(ds.estimatedDeliveryDays) || 3;
+      if (ds.podEnabled !== undefined) company.deliverySettings.podEnabled = Boolean(ds.podEnabled);
+      if (ds.podMaxAmount !== undefined) company.deliverySettings.podMaxAmount = Number(ds.podMaxAmount) || 0;
+    }
+
     await company.save();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'store.settings_update', ip: req.ip });
 
-    res.status(200).json({ success: true, data: { storeSlug: company.storeSlug, storeEnabled: company.storeEnabled, settings: company.storeSettings } });
+    res.status(200).json({
+      success: true,
+      data: {
+        storeSlug: company.storeSlug,
+        storeEnabled: company.storeEnabled,
+        settings: company.storeSettings,
+        deliverySettings: company.deliverySettings ? {
+          ...company.deliverySettings.toObject?.() ?? company.deliverySettings,
+          feesByState: company.deliverySettings.feesByState ? Object.fromEntries(company.deliverySettings.feesByState) : {},
+        } : null,
+      },
+    });
   } catch (err) {
     if (err.code === 11000) return next(new AppError('That store link is already taken.', 409));
     next(err);
