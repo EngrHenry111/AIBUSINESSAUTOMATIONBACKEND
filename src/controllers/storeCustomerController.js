@@ -1,14 +1,18 @@
 'use strict';
 
+const crypto = require('crypto');
 const StoreCustomer = require('../models/StoreCustomer');
 const CustomerPoints = require('../models/CustomerPoints');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const emailService = require('../services/emailService');
+const logger = require('../utils/logger');
 const { AppError } = require('../middleware/errorMiddleware');
 const { generateStoreCustomerToken } = require('../middleware/storeCustomerAuth');
+const { generateResetToken } = require('../utils/generateTokens');
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
+const clientUrl = () => (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
 
 const publicCustomer = (c, extra = {}) => ({
   _id: c._id,
@@ -174,5 +178,106 @@ exports.syncWishlist = async (req, res, next) => {
     req.storeCustomer.wishlist = merged;
     await req.storeCustomer.save();
     res.status(200).json({ success: true, data: req.storeCustomer.wishlist });
+  } catch (err) { next(err); }
+};
+
+// ── GET /store/:slug/customer/points ─────────────────────────────────────
+// A dedicated endpoint (rather than only the summary embedded in getMe) so
+// the account page's Points tab can show full transaction history.
+exports.getLoyaltyPoints = async (req, res, next) => {
+  try {
+    const record = await CustomerPoints.findOne({ companyId: req.store._id, customerEmail: req.storeCustomer.email });
+    if (!record) return res.status(200).json({ success: true, data: { points: 0, tier: 'Bronze', totalPointsEarned: 0, transactions: [] } });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        points: record.currentPoints,
+        tier: record.tier,
+        totalPointsEarned: record.totalPointsEarned,
+        totalRedeemed: record.totalRedeemed,
+        transactions: record.transactions.slice().reverse().slice(0, 50),
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /store/:slug/customer/password ─────────────────────────────────
+exports.changeStoreCustomerPassword = async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) return next(new AppError('New password must be at least 6 characters.', 400));
+
+    const customer = await StoreCustomer.findById(req.storeCustomer._id).select('+password');
+    if (!(await customer.comparePassword(currentPassword || ''))) {
+      return next(new AppError('Current password is incorrect.', 401));
+    }
+    customer.password = newPassword;
+    await customer.save();
+    res.status(200).json({ success: true, message: 'Password updated.' });
+  } catch (err) { next(err); }
+};
+
+// ── DELETE /store/:slug/customer/me ──────────────────────────────────────
+exports.deleteStoreCustomer = async (req, res, next) => {
+  try {
+    await StoreCustomer.deleteOne({ _id: req.storeCustomer._id });
+    res.status(200).json({ success: true, message: 'Account deleted.' });
+  } catch (err) { next(err); }
+};
+
+// ── POST /store/:slug/customer/forgot-password ───────────────────────────
+// Same shape as the main app's authController.forgotPassword: always a
+// generic success message (never reveals whether the email is registered),
+// token logged server-side as a fallback, email sent best-effort.
+exports.forgotStoreCustomerPassword = async (req, res, next) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const successMsg = 'If that email has an account on this store, a reset link has been sent.';
+    const customer = await StoreCustomer.findOne({ companyId: req.store._id, email });
+    if (!customer) return res.status(200).json({ success: true, message: successMsg });
+
+    const { token, hash } = generateResetToken();
+    customer.resetToken = hash;
+    customer.resetExpiry = Date.now() + 30 * 60 * 1000;
+    await customer.save({ validateBeforeSave: false });
+
+    const resetUrl = `${clientUrl()}/store/${req.store.storeSlug}/reset-password/${token}`;
+    logger.warn(`Store customer password reset for ${email} @ ${req.store.storeSlug}: ${resetUrl}`);
+
+    emailService.send({
+      to: email,
+      subject: `Reset your password — ${req.store.companyName}`,
+      html: emailService.baseTemplate('Reset Your Password', `
+        <h2 style="color:#0f172a;margin:0 0 6px;">Reset your password</h2>
+        <p style="color:#475569;font-size:14px;">We received a request to reset the password for your account at <strong>${req.store.companyName}</strong>. This link expires in 30 minutes.</p>
+        <p style="margin:20px 0 0;"><a href="${resetUrl}" style="background:#6366f1;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:14px;">Reset Password</a></p>
+        <p style="color:#94a3b8;font-size:12px;margin-top:16px;">If you didn't request this, you can safely ignore this email.</p>
+      `, { name: req.store.companyName, logo: req.store.logo }),
+    }).catch((e) => logger.warn(`store customer reset email failed: ${e.message}`));
+
+    res.status(200).json({ success: true, message: successMsg });
+  } catch (err) { next(err); }
+};
+
+// ── POST /store/:slug/customer/reset-password/:token ─────────────────────
+exports.resetStoreCustomerPassword = async (req, res, next) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 6) return next(new AppError('Password must be at least 6 characters.', 400));
+
+    const hash = crypto.createHash('sha256').update(req.params.token).digest('hex');
+    const customer = await StoreCustomer.findOne({
+      companyId: req.store._id, resetToken: hash, resetExpiry: { $gt: Date.now() },
+    }).select('+resetToken +resetExpiry');
+    if (!customer) return next(new AppError('Reset link is invalid or has expired.', 400));
+
+    customer.password = password;
+    customer.resetToken = undefined;
+    customer.resetExpiry = undefined;
+    await customer.save();
+
+    const token = generateStoreCustomerToken(customer._id, req.store._id);
+    res.status(200).json({ success: true, data: { token }, message: 'Password reset. You are now logged in.' });
   } catch (err) { next(err); }
 };

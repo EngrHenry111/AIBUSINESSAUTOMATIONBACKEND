@@ -23,6 +23,8 @@ const storeCustomerSchema = new mongoose.Schema({
   orderCount: { type: Number, default: 0 },
   totalSpent: { type: Number, default: 0 },
   isVerified: { type: Boolean, default: false },
+  resetToken: { type: String, select: false },
+  resetExpiry: { type: Date, select: false },
   lastLoginAt: Date,
 }, { timestamps: true });
 

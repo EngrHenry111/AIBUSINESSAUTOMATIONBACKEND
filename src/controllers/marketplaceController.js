@@ -2,6 +2,8 @@
 
 const Company = require('../models/Company');
 const Product = require('../models/Product');
+const Order = require('../models/Order');
+const cache = require('../utils/cache');
 
 const CATEGORIES = ['Fashion', 'Food', 'Electronics', 'Beauty', 'Home', 'Services', 'Agriculture', 'Other'];
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -51,6 +53,10 @@ const STORE_FIELDS = 'companyName storeSlug logo storeSettings marketplace creat
 exports.getMarketplace = async (req, res, next) => {
   try {
     const { category, location, search, verified, sort = 'featured', page = 1, limit = 20 } = req.query;
+    const cacheKey = `marketplace_stores_${category || ''}_${location || ''}_${search || ''}_${verified || ''}_${sort}_${page}_${limit}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
     const q = { storeEnabled: true };
     if (category) q['marketplace.category'] = category;
     if (location) q['marketplace.location'] = { $regex: escapeRegex(location), $options: 'i' };
@@ -75,13 +81,18 @@ exports.getMarketplace = async (req, res, next) => {
     const start = (Number(page) - 1) * Number(limit);
     const paged = cards.slice(start, start + Number(limit));
 
-    res.status(200).json({ success: true, data: paged, pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) || 1 } });
+    const payload = { success: true, data: paged, pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) || 1 } };
+    cache.set(cacheKey, payload);
+    res.status(200).json(payload);
   } catch (err) { next(err); }
 };
 
 // ── GET /marketplace/featured ──────────────────────────────────────────────
 exports.getFeaturedStores = async (req, res, next) => {
   try {
+    const cached = cache.get('marketplace_featured');
+    if (cached) return res.status(200).json(cached);
+
     let companies = await Company.find({ storeEnabled: true, 'marketplace.isFeatured': true }).select(STORE_FIELDS).limit(6).lean();
 
     if (companies.length < 6) {
@@ -97,7 +108,9 @@ exports.getFeaturedStores = async (req, res, next) => {
     }
 
     const statsMap = await ratingAndCountByCompany(companies.map((c) => c._id));
-    res.status(200).json({ success: true, data: companies.map((c) => publicStoreCard(c, statsMap.get(String(c._id)))) });
+    const payload = { success: true, data: companies.map((c) => publicStoreCard(c, statsMap.get(String(c._id)))) };
+    cache.set('marketplace_featured', payload);
+    res.status(200).json(payload);
   } catch (err) { next(err); }
 };
 
@@ -133,11 +146,67 @@ exports.searchMarketplace = async (req, res, next) => {
 // ── GET /marketplace/categories ───────────────────────────────────────────
 exports.getMarketplaceCategories = async (req, res, next) => {
   try {
+    const cached = cache.get('marketplace_categories');
+    if (cached) return res.status(200).json(cached);
+
     const counts = await Company.aggregate([
       { $match: { storeEnabled: true } },
       { $group: { _id: { $ifNull: ['$marketplace.category', 'Other'] }, count: { $sum: 1 } } },
     ]);
     const countMap = new Map(counts.map((c) => [c._id, c.count]));
-    res.status(200).json({ success: true, data: CATEGORIES.map((cat) => ({ category: cat, storeCount: countMap.get(cat) || 0 })) });
+    const payload = { success: true, data: CATEGORIES.map((cat) => ({ category: cat, storeCount: countMap.get(cat) || 0 })) };
+    cache.set('marketplace_categories', payload);
+    res.status(200).json(payload);
+  } catch (err) { next(err); }
+};
+
+// ── GET /marketplace/stats ────────────────────────────────────────────────
+// Social-proof numbers for the landing/marketplace hero — cached like the
+// rest of this controller since it's public and doesn't need to be exact
+// to the second.
+exports.getMarketplaceStats = async (req, res, next) => {
+  try {
+    const cached = cache.get('marketplace_stats');
+    if (cached) return res.status(200).json(cached);
+
+    const enabledStores = await Company.find({ storeEnabled: true }).select('_id').lean();
+    const storeIds = enabledStores.map((c) => c._id);
+    const [totalProducts, totalOrders] = await Promise.all([
+      Product.countDocuments({ companyId: { $in: storeIds }, status: { $ne: 'inactive' } }),
+      Order.countDocuments({ companyId: { $in: storeIds }, source: 'storefront' }),
+    ]);
+
+    const payload = { success: true, data: { totalStores: storeIds.length, totalProducts, totalOrders } };
+    cache.set('marketplace_stats', payload);
+    res.status(200).json(payload);
+  } catch (err) { next(err); }
+};
+
+// ── GET /marketplace/trending ──────────────────────────────────────────────
+// Top-selling products across every enabled store, each carrying its store's
+// name/slug — same shape as searchMarketplace's results.
+exports.getTrendingProducts = async (req, res, next) => {
+  try {
+    const cached = cache.get('marketplace_trending');
+    if (cached) return res.status(200).json(cached);
+
+    const stores = await Company.find({ storeEnabled: true }).select('_id companyName storeSlug').lean();
+    if (!stores.length) return res.status(200).json({ success: true, data: [] });
+    const storeMap = new Map(stores.map((c) => [String(c._id), c]));
+
+    const products = await Product.find({
+      companyId: { $in: stores.map((c) => c._id) }, status: { $ne: 'inactive' },
+    }).sort({ sold: -1, viewCount: -1 }).limit(12).lean();
+
+    const { publicProduct } = require('./storefrontController');
+    const payload = {
+      success: true,
+      data: products.map((p) => {
+        const store = storeMap.get(String(p.companyId));
+        return { ...publicProduct(p), store: { name: store?.companyName || null, slug: store?.storeSlug || null } };
+      }),
+    };
+    cache.set('marketplace_trending', payload);
+    res.status(200).json(payload);
   } catch (err) { next(err); }
 };

@@ -33,13 +33,18 @@ router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
 // ── Store customer accounts — separate from the main BizlyAI login ───────
 router.post('/:slug/customer/register', authLimiter, loadStore, customerCtrl.registerStoreCustomer);
 router.post('/:slug/customer/login', authLimiter, loadStore, customerCtrl.loginStoreCustomer);
+router.post('/:slug/customer/forgot-password', authLimiter, loadStore, customerCtrl.forgotStoreCustomerPassword);
+router.post('/:slug/customer/reset-password/:token', authLimiter, loadStore, customerCtrl.resetStoreCustomerPassword);
 router.get('/:slug/customer/me', loadStore, authenticateStoreCustomer, customerCtrl.getStoreCustomer);
 router.patch('/:slug/customer/me', loadStore, authenticateStoreCustomer, customerCtrl.updateStoreCustomer);
+router.patch('/:slug/customer/password', loadStore, authenticateStoreCustomer, customerCtrl.changeStoreCustomerPassword);
+router.delete('/:slug/customer/me', loadStore, authenticateStoreCustomer, customerCtrl.deleteStoreCustomer);
 router.put('/:slug/customer/addresses', loadStore, authenticateStoreCustomer, customerCtrl.updateStoreCustomerAddresses);
 router.get('/:slug/customer/orders', loadStore, authenticateStoreCustomer, customerCtrl.getCustomerOrders);
 router.get('/:slug/customer/wishlist', loadStore, authenticateStoreCustomer, customerCtrl.getWishlist);
 router.post('/:slug/customer/wishlist/sync', loadStore, authenticateStoreCustomer, customerCtrl.syncWishlist);
 router.post('/:slug/customer/wishlist/:productId', loadStore, authenticateStoreCustomer, customerCtrl.addToWishlist);
 router.delete('/:slug/customer/wishlist/:productId', loadStore, authenticateStoreCustomer, customerCtrl.removeFromWishlist);
+router.get('/:slug/customer/points', loadStore, authenticateStoreCustomer, customerCtrl.getLoyaltyPoints);
 
 module.exports = router;
