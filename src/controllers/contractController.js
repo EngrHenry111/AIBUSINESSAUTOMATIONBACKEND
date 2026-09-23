@@ -113,10 +113,20 @@ function contractHtmlDocument(contract, company) {
   h1 { font-size: 20px; text-align: center; margin: 0 0 4px; }
   .subtitle { text-align: center; font-size: 12px; color: #64748b; margin: 0 0 28px; font-family: Arial, sans-serif; }
   .disclaimer { font-family: Arial, sans-serif; font-size: 10.5px; color: #94a3b8; border: 1px dashed #cbd5e1; padding: 10px 12px; border-radius: 6px; margin-bottom: 24px; }
-  @media print { body { padding: 0; } }
+  .print-hint {
+    position: fixed; top: 20px; right: 20px; font-family: Arial, sans-serif; font-size: 12px; font-weight: 700;
+    background: #1e293b; color: #fff; border-radius: 8px; padding: 9px 16px;
+  }
+  @media print { body { padding: 0; } .no-print { display: none !important; } }
 </style>
 </head>
 <body>
+  <!-- This response is served with a strict script-src 'none' CSP (see
+       app.js) for the same reason the invoice/meeting-minutes PDF exports
+       are — it embeds contract text a user has edited, so no inline script
+       (including a window.print() button) can run here. Every browser's
+       own Ctrl+P / File > Print already does the job. -->
+  <div class="print-hint no-print">Press Ctrl+P (⌘P on Mac) to print or save as PDF</div>
   <div class="letterhead">
     ${company?.logo ? `<img src="${esc(company.logo)}" alt="${esc(company.companyName)}"/>` : ''}
     <div>
@@ -200,15 +210,20 @@ exports.getContract = async (req, res, next) => {
 };
 
 // ── PUT /contracts/:id ────────────────────────────────────────────────────
-const EDITABLE_FIELDS = ['title', 'content', 'parties', 'terms', 'customClauses', 'status', 'expiresAt'];
+// Only a draft can be freely edited — once sent, the copy the other party
+// received must stay the copy they can sign; status moves forward only via
+// sendContract() and markSigned() below, never through this generic update.
+const EDITABLE_FIELDS = ['title', 'content', 'parties', 'terms', 'customClauses', 'expiresAt'];
 exports.updateContract = async (req, res, next) => {
   try {
     const contract = await Contract.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!contract) return next(new AppError('Contract not found.', 404));
+    if (contract.status !== 'draft') {
+      return next(new AppError('Only draft contracts can be edited.', 400));
+    }
 
     EDITABLE_FIELDS.forEach((f) => { if (req.body[f] !== undefined) contract[f] = req.body[f]; });
     if (req.body.content !== undefined) contract.aiGenerated = false; // manual edits mean it's no longer purely AI output
-    if (req.body.status === 'signed' && !contract.signedAt) contract.signedAt = new Date();
 
     await contract.save();
     res.status(200).json({ success: true, data: contract });
@@ -294,5 +309,19 @@ exports.duplicateContract = async (req, res, next) => {
     });
 
     res.status(201).json({ success: true, data: copy });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /contracts/:id/sign ────────────────────────────────────────────
+exports.markSigned = async (req, res, next) => {
+  try {
+    const contract = await Contract.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!contract) return next(new AppError('Contract not found.', 404));
+    if (contract.status === 'signed') return res.status(200).json({ success: true, data: contract });
+
+    contract.status = 'signed';
+    contract.signedAt = new Date();
+    await contract.save();
+    res.status(200).json({ success: true, data: contract });
   } catch (err) { next(err); }
 };
