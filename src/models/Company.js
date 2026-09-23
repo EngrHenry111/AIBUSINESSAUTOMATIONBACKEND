@@ -118,6 +118,10 @@ const companySchema = new mongoose.Schema({
     location: { type: String, trim: true }, // e.g. "Lagos"
     isVerified: { type: Boolean, default: false },
     isFeatured: { type: Boolean, default: false },
+    // Admin-imposed marketplace suspension — deliberately separate from
+    // storeEnabled (the owner's own toggle) and status (whole-account
+    // suspension). See adminController.suspendStore.
+    isSuspended: { type: Boolean, default: false },
     tags: { type: [String], default: [] },
   },
 

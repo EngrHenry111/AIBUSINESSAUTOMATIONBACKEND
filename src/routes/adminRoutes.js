@@ -18,6 +18,12 @@ router.get('/health', ctrl.getHealth);
 router.get('/revenue', ctrl.getRevenue);
 router.get('/audit-logs', ctrl.getAuditLogs);
 
+// ── Marketplace ────────────────────────────────────────────────────────────
+router.get('/marketplace', ctrl.getMarketplaceOverview);
+router.get('/marketplace/orders', ctrl.getMarketplaceOrders);
+router.patch('/stores/:companyId/feature', ctrl.featureStore);
+router.patch('/stores/:companyId/suspend', ctrl.suspendStore);
+
 // ── Companies ──────────────────────────────────────────────────────────────
 router.get('/companies', ctrl.getCompanies);
 router.get('/companies/:id', ctrl.getCompany);

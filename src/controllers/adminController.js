@@ -10,11 +10,16 @@ const Chat = require('../models/Chat');
 const Message = require('../models/Message');
 const AuditLog = require('../models/AuditLog');
 const Payment = require('../models/Payment');
+const Order = require('../models/Order');
+const Product = require('../models/Product');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { checkHealth: checkEmbeddingHealth } = require('../services/embeddingService');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
+const marketplaceCache = require('../utils/cache');
+
+const DEFAULT_COMMISSION_PERCENT = 3;
 
 const PLAN_KEYS = ['trial', 'starter', 'professional', 'business', 'enterprise'];
 
@@ -493,6 +498,216 @@ exports.getHealth = async (req, res, next) => {
           timestamp: l.timestamp,
         })),
       },
+    });
+  } catch (err) { next(err); }
+};
+
+// ── Marketplace ──────────────────────────────────────────────────────────────
+// "Suspended" here is deliberately a separate flag from both `storeEnabled`
+// (the owner's own on/off switch for their store, see storefrontController's
+// findStore()) and `status` (the whole-company account suspension used by
+// suspendCompany above). An admin-imposed marketplace suspension must not
+// silently re-enable a store the owner turned off themselves, and must not
+// touch the company's ability to log in and use the rest of the platform.
+const marketplaceCommissionPercent = (c) => c?.paymentSettings?.commissionPercent ?? DEFAULT_COMMISSION_PERCENT;
+const storeIsListed = (c) => Boolean(c.storeEnabled) && !c.marketplace?.isSuspended;
+
+// ── GET /admin/marketplace ───────────────────────────────────────────────────
+exports.getMarketplaceOverview = async (req, res, next) => {
+  try {
+    const monthStart = startOfMonth();
+
+    const storeCompanies = await Company.find({ storeSlug: { $exists: true, $ne: null } })
+      .populate('owner', 'name email')
+      .select('companyName storeSlug storeEnabled marketplace paymentSettings owner createdAt')
+      .lean();
+    const companyIds = storeCompanies.map((c) => c._id);
+
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13);
+    fourteenDaysAgo.setHours(0, 0, 0, 0);
+
+    const [orderAgg, productCounts, dailyAgg] = await Promise.all([
+      Order.aggregate([
+        { $match: { companyId: { $in: companyIds }, source: 'storefront' } },
+        { $group: { _id: '$companyId', orders: { $sum: 1 }, revenue: { $sum: '$total' } } },
+      ]),
+      Product.aggregate([
+        { $match: { companyId: { $in: companyIds }, status: { $ne: 'inactive' } } },
+        { $group: { _id: '$companyId', n: { $sum: 1 } } },
+      ]),
+      // Grouped by day AND company (not just day) since each company can have
+      // its own commissionPercent — the rate is applied per-company below,
+      // then rolled up into one dense, zero-filled 14-day series.
+      Order.aggregate([
+        { $match: { companyId: { $in: companyIds }, source: 'storefront', createdAt: { $gte: fourteenDaysAgo } } },
+        { $group: { _id: { day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, company: '$companyId' }, revenue: { $sum: '$total' } } },
+      ]),
+    ]);
+    const orderMap = new Map(orderAgg.map((a) => [String(a._id), a]));
+    const productMap = new Map(productCounts.map((a) => [String(a._id), a.n]));
+    const companyRateMap = new Map(storeCompanies.map((c) => [String(c._id), marketplaceCommissionPercent(c)]));
+
+    const commissionByDay = new Map();
+    dailyAgg.forEach((d) => {
+      const rate = companyRateMap.get(String(d._id.company)) ?? DEFAULT_COMMISSION_PERCENT;
+      const commission = d.revenue * (rate / 100);
+      commissionByDay.set(d._id.day, (commissionByDay.get(d._id.day) || 0) + commission);
+    });
+    const dailyCommission = [];
+    const cursor = new Date(fourteenDaysAgo);
+    for (let i = 0; i < 14; i++) {
+      const key = cursor.toISOString().slice(0, 10);
+      dailyCommission.push({
+        date: key,
+        label: cursor.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        commission: Math.round((commissionByDay.get(key) || 0) * 100) / 100,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    let totalMarketplaceOrders = 0;
+    let totalMarketplaceRevenue = 0;
+    let totalCommission = 0;
+
+    const stores = storeCompanies.map((c) => {
+      const stat = orderMap.get(String(c._id));
+      const orders = stat?.orders || 0;
+      const revenue = stat?.revenue || 0;
+      const commissionPercent = marketplaceCommissionPercent(c);
+      const commission = Math.round(revenue * (commissionPercent / 100) * 100) / 100;
+
+      totalMarketplaceOrders += orders;
+      totalMarketplaceRevenue += revenue;
+      totalCommission += commission;
+
+      return {
+        _id: c._id,
+        companyName: c.companyName,
+        storeSlug: c.storeSlug,
+        owner: c.owner ? { name: c.owner.name, email: c.owner.email } : null,
+        productsCount: productMap.get(String(c._id)) || 0,
+        ordersCount: orders,
+        revenue,
+        commissionPercent,
+        commission: Math.round(commission * 100) / 100,
+        isFeatured: Boolean(c.marketplace?.isFeatured),
+        isSuspended: Boolean(c.marketplace?.isSuspended),
+        storeEnabled: Boolean(c.storeEnabled),
+        listed: storeIsListed(c),
+        createdAt: c.createdAt,
+      };
+    });
+
+    stores.sort((a, b) => b.revenue - a.revenue);
+    // New stores this month is approximated by company signup date — there's
+    // no separate "store first enabled" timestamp on Company.
+    const newStoresThisMonth = storeCompanies.filter((c) => new Date(c.createdAt) >= monthStart).length;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalStores: stores.length,
+        activeStores: stores.filter((s) => s.listed).length,
+        totalMarketplaceOrders,
+        totalMarketplaceRevenue,
+        totalCommission: Math.round(totalCommission * 100) / 100,
+        newStoresThisMonth,
+        topSellingStores: stores.slice(0, 5),
+        dailyCommission,
+        stores,
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /admin/stores/:companyId/feature ───────────────────────────────────
+exports.featureStore = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.params.companyId).select('companyName marketplace');
+    if (!company) return next(new AppError('Store not found.', 404));
+
+    company.marketplace = company.marketplace || {};
+    company.marketplace.isFeatured = !company.marketplace.isFeatured;
+    await company.save();
+    marketplaceCache.flushAll();
+
+    writeAuditLog({
+      companyId: company._id, userId: req.user._id, action: 'admin.store.feature',
+      description: `${company.marketplace.isFeatured ? 'Featured' : 'Unfeatured'} store "${company.companyName}"`, ip: req.ip,
+    });
+    res.status(200).json({ success: true, data: { isFeatured: company.marketplace.isFeatured } });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /admin/stores/:companyId/suspend ───────────────────────────────────
+// Toggles the marketplace suspension — does NOT touch company.status (the
+// account stays fully usable) or storeEnabled (the owner's own setting).
+// A suspended store also stops resolving on its direct /store/:slug link
+// (see storefrontController.findStore) — this is a trust & safety action,
+// not just a directory-visibility toggle.
+exports.suspendStore = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.params.companyId).select('companyName marketplace');
+    if (!company) return next(new AppError('Store not found.', 404));
+
+    company.marketplace = company.marketplace || {};
+    company.marketplace.isSuspended = !company.marketplace.isSuspended;
+    await company.save();
+    marketplaceCache.flushAll();
+
+    const action = company.marketplace.isSuspended ? 'suspended' : 'reactivated';
+    writeAuditLog({
+      companyId: company._id, userId: req.user._id, action: `admin.store.${action}`,
+      description: `${action === 'suspended' ? 'Suspended' : 'Reactivated'} store "${company.companyName}" on the marketplace (company account unaffected)`, ip: req.ip,
+    });
+    logger.warn(`Admin ${req.user.email} ${action} store ${company.companyName} on the marketplace`);
+    res.status(200).json({ success: true, data: { isSuspended: company.marketplace.isSuspended } });
+  } catch (err) { next(err); }
+};
+
+// ── GET /admin/marketplace/orders ─────────────────────────────────────────────
+exports.getMarketplaceOrders = async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const filter = { source: 'storefront' };
+
+    const [orders, total, revenueByCompany] = await Promise.all([
+      Order.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
+        .select('orderNumber companyId customer total status paymentMethod createdAt').lean(),
+      Order.countDocuments(filter),
+      Order.aggregate([{ $match: filter }, { $group: { _id: '$companyId', revenue: { $sum: '$total' } } }]),
+    ]);
+
+    const companyIds = [...new Set([...orders.map((o) => o.companyId), ...revenueByCompany.map((r) => r._id)].map(String))];
+    const companies = await Company.find({ _id: { $in: companyIds } }).select('companyName storeSlug paymentSettings.commissionPercent').lean();
+    const companyMap = new Map(companies.map((c) => [String(c._id), c]));
+
+    const totalCommission = revenueByCompany.reduce((sum, r) => {
+      const rate = marketplaceCommissionPercent(companyMap.get(String(r._id)));
+      return sum + r.revenue * (rate / 100);
+    }, 0);
+
+    res.status(200).json({
+      success: true,
+      data: orders.map((o) => {
+        const company = companyMap.get(String(o.companyId));
+        const rate = marketplaceCommissionPercent(company);
+        return {
+          _id: o._id,
+          orderNumber: o.orderNumber,
+          company: company ? { name: company.companyName, slug: company.storeSlug } : null,
+          customer: o.customer?.name || null,
+          total: o.total,
+          commission: Math.round(o.total * (rate / 100) * 100) / 100,
+          status: o.status,
+          paymentMethod: o.paymentMethod,
+          createdAt: o.createdAt,
+        };
+      }),
+      totalCommission: Math.round(totalCommission * 100) / 100,
+      pagination: { total, page, limit, pages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) { next(err); }
 };

@@ -57,7 +57,7 @@ exports.getMarketplace = async (req, res, next) => {
     const cached = cache.get(cacheKey);
     if (cached) return res.status(200).json(cached);
 
-    const q = { storeEnabled: true };
+    const q = { storeEnabled: true, 'marketplace.isSuspended': { $ne: true } };
     if (category) q['marketplace.category'] = category;
     if (location) q['marketplace.location'] = { $regex: escapeRegex(location), $options: 'i' };
     if (verified === 'true') q['marketplace.isVerified'] = true;
@@ -93,11 +93,11 @@ exports.getFeaturedStores = async (req, res, next) => {
     const cached = cache.get('marketplace_featured');
     if (cached) return res.status(200).json(cached);
 
-    let companies = await Company.find({ storeEnabled: true, 'marketplace.isFeatured': true }).select(STORE_FIELDS).limit(6).lean();
+    let companies = await Company.find({ storeEnabled: true, 'marketplace.isSuspended': { $ne: true }, 'marketplace.isFeatured': true }).select(STORE_FIELDS).limit(6).lean();
 
     if (companies.length < 6) {
       const excludeIds = companies.map((c) => c._id);
-      const fillers = await Company.find({ storeEnabled: true, _id: { $nin: excludeIds } }).select(STORE_FIELDS).lean();
+      const fillers = await Company.find({ storeEnabled: true, 'marketplace.isSuspended': { $ne: true }, _id: { $nin: excludeIds } }).select(STORE_FIELDS).lean();
       const fillerStats = await ratingAndCountByCompany(fillers.map((c) => c._id));
       const ranked = fillers
         .map((c) => ({ c, rating: fillerStats.get(String(c._id))?.ratedCount ? fillerStats.get(String(c._id)).ratedSum / fillerStats.get(String(c._id)).ratedCount : 0 }))
@@ -122,7 +122,7 @@ exports.searchMarketplace = async (req, res, next) => {
     const q = String(req.query.q || '').trim();
     if (!q) return res.status(200).json({ success: true, data: [] });
 
-    const stores = await Company.find({ storeEnabled: true }).select('_id companyName storeSlug').lean();
+    const stores = await Company.find({ storeEnabled: true, 'marketplace.isSuspended': { $ne: true } }).select('_id companyName storeSlug').lean();
     if (!stores.length) return res.status(200).json({ success: true, data: [] });
     const storeMap = new Map(stores.map((c) => [String(c._id), c]));
 
@@ -150,7 +150,7 @@ exports.getMarketplaceCategories = async (req, res, next) => {
     if (cached) return res.status(200).json(cached);
 
     const counts = await Company.aggregate([
-      { $match: { storeEnabled: true } },
+      { $match: { storeEnabled: true, 'marketplace.isSuspended': { $ne: true } } },
       { $group: { _id: { $ifNull: ['$marketplace.category', 'Other'] }, count: { $sum: 1 } } },
     ]);
     const countMap = new Map(counts.map((c) => [c._id, c.count]));
@@ -169,7 +169,7 @@ exports.getMarketplaceStats = async (req, res, next) => {
     const cached = cache.get('marketplace_stats');
     if (cached) return res.status(200).json(cached);
 
-    const enabledStores = await Company.find({ storeEnabled: true }).select('_id').lean();
+    const enabledStores = await Company.find({ storeEnabled: true, 'marketplace.isSuspended': { $ne: true } }).select('_id').lean();
     const storeIds = enabledStores.map((c) => c._id);
     const [totalProducts, totalOrders] = await Promise.all([
       Product.countDocuments({ companyId: { $in: storeIds }, status: { $ne: 'inactive' } }),
@@ -190,7 +190,7 @@ exports.getTrendingProducts = async (req, res, next) => {
     const cached = cache.get('marketplace_trending');
     if (cached) return res.status(200).json(cached);
 
-    const stores = await Company.find({ storeEnabled: true }).select('_id companyName storeSlug').lean();
+    const stores = await Company.find({ storeEnabled: true, 'marketplace.isSuspended': { $ne: true } }).select('_id companyName storeSlug').lean();
     if (!stores.length) return res.status(200).json({ success: true, data: [] });
     const storeMap = new Map(stores.map((c) => [String(c._id), c]));
 

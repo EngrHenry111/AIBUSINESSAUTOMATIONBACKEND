@@ -32,6 +32,7 @@ const naira = (n) => `₦${Number(n || 0).toLocaleString()}`;
 async function findStore(slug, { requirePayments = false } = {}) {
   const company = await Company.findOne({ storeSlug: String(slug || '').toLowerCase().trim() });
   if (!company || !company.storeEnabled) throw new AppError('Store not found.', 404);
+  if (company.marketplace?.isSuspended) throw new AppError('This store has been suspended.', 403);
   if (requirePayments && !company.paymentSettings?.isPaymentSetup) {
     throw new AppError('This store is not accepting payments yet.', 400);
   }
