@@ -26,7 +26,10 @@ function publicWidgetConfig(company) {
   return {
     companyName: company.companyName,
     primaryColor: ws.primaryColor || company.storeSettings?.primaryColor || DEFAULTS.primaryColor,
-    greeting: ws.greeting || DEFAULTS.greeting,
+    // A business that hasn't set its own greeting still gets one that names
+    // their store rather than the generic default — customized greetings
+    // always win.
+    greeting: ws.greeting || `Hi! Welcome to ${company.companyName}. How can I help you today?`,
     placeholder: ws.placeholder || DEFAULTS.placeholder,
     position: ws.position || DEFAULTS.position,
     avatar: company.logo || null,

@@ -7,6 +7,8 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const Coupon = require('../models/Coupon');
 const StoreCustomer = require('../models/StoreCustomer');
+const AbandonedCart = require('../models/AbandonedCart');
+const ProductPair = require('../models/ProductPair');
 const { AppError } = require('../middleware/errorMiddleware');
 const { paystackAPI } = require('../utils/paystack');
 const { applyStockAdjustment } = require('./productController');
@@ -265,6 +267,130 @@ exports.getStoreLoyaltyStatus = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── POST /store/:slug/cart/save ──────────────────────────────────────
+// Public — fired (debounced) from the checkout page as soon as the shopper
+// has entered an email, so we have something to remind them with if they
+// leave before paying. Upserted by (companyId, sessionId) so it always
+// reflects their latest cart contents rather than the first snapshot.
+exports.saveAbandonedCart = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const { sessionId, email, name, phone, items, total } = req.body;
+    if (!sessionId) return next(new AppError('A session id is required.', 400));
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanEmail || !/^\S+@\S+\.\S+$/.test(cleanEmail)) return next(new AppError('A valid email is required.', 400));
+    if (!Array.isArray(items) || items.length === 0) return next(new AppError('Cart is empty.', 400));
+
+    await AbandonedCart.findOneAndUpdate(
+      { companyId: company._id, sessionId: String(sessionId) },
+      {
+        companyId: company._id,
+        sessionId: String(sessionId),
+        customer: { name: name || undefined, email: cleanEmail, phone: phone || undefined },
+        items: items.map((i) => ({
+          productId: i.productId, name: i.name, image: i.image, price: i.price,
+          quantity: i.quantity, variantGroup: i.variantGroup, variantValue: i.variantValue,
+        })),
+        total: Number(total) || 0,
+        recovered: false,
+        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+    res.status(200).json({ success: true });
+  } catch (err) { next(err); }
+};
+
+// ── GET /store/:slug/cart/recover/:sessionId ─────────────────────────
+// Public — powers the "?recover=<sessionId>" link sent in the reminder
+// email. Returns the saved cart items so the storefront can restore them
+// into localStorage; it doesn't mark anything as recovered by itself (that
+// only happens once the shopper actually completes an order — see
+// markCartRecovered() below), since just clicking the link isn't a purchase.
+exports.recoverCart = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const cart = await AbandonedCart.findOne({ companyId: company._id, sessionId: req.params.sessionId }).lean();
+    if (!cart) return next(new AppError('Saved cart not found or has expired.', 404));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        items: cart.items.map((i) => ({
+          productId: i.productId, name: i.name, image: i.image, price: i.price,
+          quantity: i.quantity, variantGroup: i.variantGroup, variantValue: i.variantValue,
+          max: null,
+        })),
+        total: cart.total,
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// Fire-and-forget — called once an order actually completes, so the
+// abandoned-cart reminder job stops emailing someone who already checked out.
+function markCartRecovered(companyId, sessionId) {
+  if (!sessionId) return;
+  AbandonedCart.updateOne(
+    { companyId, sessionId: String(sessionId) },
+    { recovered: true, recoveredAt: new Date() },
+  ).catch(() => {});
+}
+
+// ── GET /store/:slug/products/:id/recommendations ────────────────────
+// Public. Two independent, rule-based signals in one response (one round
+// trip instead of two): a scored "You May Also Like" list blending category
+// match, price similarity, purchase-pattern (ProductPair) and rating, plus a
+// separate "Frequently Bought Together" list driven purely by ProductPair
+// counts. Not an LLM call — this is plain scoring over data already in the
+// store, which is faster, free and fully deterministic for a shopper-facing
+// list like this.
+exports.getRecommendations = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const product = await Product.findOne({ _id: req.params.id, companyId: company._id }).lean();
+    if (!product) return next(new AppError('Product not found.', 404));
+
+    const pairs = await ProductPair.find({
+      companyId: company._id,
+      $or: [{ productA: product._id }, { productB: product._id }],
+    }).sort({ count: -1 }).limit(10).lean();
+
+    const pairedIds = pairs.map((pr) => (String(pr.productA) === String(product._id) ? pr.productB : pr.productA));
+    const pairedCountById = new Map(
+      pairs.map((pr) => [String(String(pr.productA) === String(product._id) ? pr.productB : pr.productA), pr.count])
+    );
+
+    const candidates = await Product.find({
+      companyId: company._id,
+      _id: { $ne: product._id },
+      status: { $ne: 'inactive' },
+    }).limit(200).lean();
+
+    const price = product.effectivePrice ?? product.price;
+    const scored = candidates.map((p) => {
+      let score = 0;
+      if (p.category && p.category === product.category) score += 3;
+      const pPrice = p.isFlashSale && p.flashSalePrice != null ? p.flashSalePrice : p.price;
+      if (price > 0 && Math.abs(pPrice - price) / price <= 0.3) score += 2;
+      const pairCount = pairedCountById.get(String(p._id));
+      if (pairCount) score += Math.min(10, pairCount * 3);
+      score += (p.ratings?.average || 0) * 0.5;
+      return { p, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const youMayAlsoLike = scored.filter((s) => s.score > 0).slice(0, 4).map((s) => publicProduct(s.p));
+
+    const fbtProducts = pairedIds.length
+      ? await Product.find({ _id: { $in: pairedIds.slice(0, 3) }, companyId: company._id, status: { $ne: 'inactive' } }).lean()
+      : [];
+    const frequentlyBoughtTogether = fbtProducts.map(publicProduct);
+
+    res.status(200).json({ success: true, data: { youMayAlsoLike, frequentlyBoughtTogether } });
+  } catch (err) { next(err); }
+};
+
 // ── POST /store/:slug/products/:id/review ───────────────────────────
 // Only a customer who actually bought this product (a delivered order
 // containing it, matched by email) can review it — the whole point of a
@@ -410,7 +536,7 @@ exports.initializeStorePayment = async (req, res, next) => {
   try {
     const {
       items = [], customer = {}, redeemPoints = 0, couponCode,
-      paymentMethod = 'paystack', shippingState, shippingCity, notes,
+      paymentMethod = 'paystack', shippingState, shippingCity, notes, cartSessionId,
     } = req.body;
     if (!PAYMENT_METHODS.includes(paymentMethod)) return next(new AppError('Invalid payment method.', 400));
 
@@ -493,12 +619,14 @@ exports.initializeStorePayment = async (req, res, next) => {
         return next(new AppError(`Pay on delivery is only available for orders up to ${naira(ds.podMaxAmount ?? 50000)}.`, 400));
       }
       const order = await createDirectOrder(company, { ...orderMeta, total, paymentMethod: 'pay_on_delivery' }, { io: req.app.get('io') });
+      markCartRecovered(company._id, cartSessionId);
       return res.status(201).json({ success: true, data: { order: publicOrder(order), total, directOrder: true } });
     }
 
     // ── Bank Transfer — order placed now, awaiting the owner's manual approval ──
     if (paymentMethod === 'bank_transfer') {
       const order = await createDirectOrder(company, { ...orderMeta, total, paymentMethod: 'bank_transfer' }, { io: req.app.get('io') });
+      markCartRecovered(company._id, cartSessionId);
       return res.status(201).json({
         success: true,
         data: {
@@ -528,6 +656,7 @@ exports.initializeStorePayment = async (req, res, next) => {
         slug: company.storeSlug,
         paymentMethod,
         orderTotal: total,
+        cartSessionId,
         ...orderMeta,
       },
       callback_url: `${clientUrl()}/store/${company.storeSlug}/success`,
@@ -599,6 +728,29 @@ async function nextOrderNumber(companyId) {
   return `ORD-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
 }
 
+// Records every unique pair of distinct products that appeared in the same
+// order, so getRecommendations() can surface real "bought together" data
+// instead of only category/price guesses. Pair order is canonicalized
+// (lexicographically smaller id first) so (A,B) and (B,A) are the same doc.
+async function incrementProductPairs(companyId, items) {
+  const ids = [...new Set((items || []).map((i) => i.productId).filter(Boolean).map(String))];
+  if (ids.length < 2) return;
+  const ops = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const [a, b] = [ids[i], ids[j]].sort();
+      ops.push({
+        updateOne: {
+          filter: { companyId, productA: a, productB: b },
+          update: { $inc: { count: 1 }, $setOnInsert: { companyId, productA: a, productB: b } },
+          upsert: true,
+        },
+      });
+    }
+  }
+  if (ops.length) await ProductPair.bulkWrite(ops);
+}
+
 // ── Shared post-creation work for every storefront order, regardless of
 // payment method: stock deduction, customer record sync, coupon usage,
 // loyalty spend/earn, cache/socket invalidation, emails and SMS. Called
@@ -634,6 +786,8 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
   }
   order.stockApplied = true;
   await order.save();
+
+  incrementProductPairs(company._id, order.items).catch(() => {});
 
   await recordCustomerTransaction({
     companyId: company._id, customer: order.customer, amount: order.total, countsAsOrder: true, date: order.createdAt,
@@ -800,6 +954,7 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
     throw err;
   }
 
+  markCartRecovered(company._id, meta.cartSessionId);
   await finalizePlacedOrder(company, order, { io });
   return order;
 }

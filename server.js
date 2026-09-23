@@ -102,6 +102,12 @@ async function bootstrap() {
     }, 60 * 60 * 1000);
     logger.info('✅ Loyalty points expiry sweep scheduled (runs daily at 3am, checked hourly)');
 
+    // ── Abandoned cart recovery emails — checked hourly ─────────────────────
+    const { checkAbandonedCarts } = require('./src/utils/abandonedCartReminders');
+    checkAbandonedCarts();
+    setInterval(checkAbandonedCarts, 60 * 60 * 1000);
+    logger.info('✅ Abandoned cart reminder checker scheduled (runs hourly)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.
