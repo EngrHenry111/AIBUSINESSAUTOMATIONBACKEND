@@ -96,7 +96,10 @@ exports.inviteMember = async (req, res, next) => {
     const company = await Company.findById(req.companyId).select('limits');
     const currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active' });
 
-    if (currentCount >= company.limits.maxUsers) {
+    // maxUsers of -1 means unlimited (Enterprise) — without this guard a
+    // negative limit would make currentCount >= maxUsers true immediately
+    // and block every single invite.
+    if (company.limits.maxUsers > 0 && currentCount >= company.limits.maxUsers) {
       return next(new AppError(`User limit reached (${company.limits.maxUsers}). Upgrade your plan to add more members.`, 403));
     }
 

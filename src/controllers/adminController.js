@@ -25,14 +25,17 @@ const PLAN_KEYS = ['trial', 'starter', 'professional', 'business', 'enterprise']
 
 // Monthly price in the platform's billing currency (NGN) — mirrors
 // paymentController PLANS.monthlyAmount. Used to compute MRR.
-const PLAN_MONTHLY = { trial: 0, starter: 4900, professional: 14900, business: 34900, enterprise: 34900 };
+const PLAN_MONTHLY = { trial: 0, starter: 4900, professional: 14900, business: 34900, enterprise: 99900 };
 
+// -1 means unlimited (Enterprise) — userController's inviteMember guard and
+// the dashboard's usage meters both already treat a non-positive limit as
+// "no cap" rather than "no seats".
 const PLAN_LIMITS = {
   trial: { maxUsers: 5, maxDocuments: 100, maxQuestionsPerMonth: 500 },
   starter: { maxUsers: 5, maxDocuments: 500, maxQuestionsPerMonth: 2000 },
   professional: { maxUsers: 25, maxDocuments: 2000, maxQuestionsPerMonth: 10000 },
   business: { maxUsers: 100, maxDocuments: 10000, maxQuestionsPerMonth: 50000 },
-  enterprise: { maxUsers: 500, maxDocuments: 100000, maxQuestionsPerMonth: 500000 },
+  enterprise: { maxUsers: -1, maxDocuments: -1, maxQuestionsPerMonth: -1 },
 };
 
 const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };

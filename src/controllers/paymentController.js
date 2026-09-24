@@ -27,6 +27,10 @@ const PAYSTACK_PLANS = {
     monthly: process.env.PAYSTACK_BUSINESS_MONTHLY_CODE,
     annual: process.env.PAYSTACK_BUSINESS_ANNUAL_CODE,
   },
+  enterprise: {
+    monthly: process.env.PAYSTACK_ENTERPRISE_MONTHLY_CODE,
+    annual: process.env.PAYSTACK_ENTERPRISE_ANNUAL_CODE,
+  },
 };
 
 // plan_code -> { plan, billingCycle }
@@ -66,6 +70,20 @@ const PLANS = {
     features: { maxUsers: 100, maxDocuments: 10000, maxQuestionsPerMonth: 50000 },
     paystackMonthlyCode: process.env.PAYSTACK_BUSINESS_MONTHLY_CODE,
     paystackAnnualCode: process.env.PAYSTACK_BUSINESS_ANNUAL_CODE,
+  },
+  // Billing.jsx shows Enterprise as a "Contact Sales" card, not a self-serve
+  // Paystack subscribe button — but it's listed here too so admin-side MRR
+  // math, /payments/plans consumers, and a manual plan override all agree on
+  // the same numbers. -1 in `features` means unlimited (see userController's
+  // inviteMember guard, which treats <=0 as "no cap" rather than "no seats").
+  enterprise: {
+    name: 'Enterprise',
+    monthlyAmount: 99900,
+    annualAmount: 999000,
+    currency: 'NGN',
+    features: { maxUsers: -1, maxDocuments: -1, maxQuestionsPerMonth: -1 },
+    paystackMonthlyCode: process.env.PAYSTACK_ENTERPRISE_MONTHLY_CODE,
+    paystackAnnualCode: process.env.PAYSTACK_ENTERPRISE_ANNUAL_CODE,
   },
 };
 
