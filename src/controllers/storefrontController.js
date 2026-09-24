@@ -745,6 +745,8 @@ const publicOrder = (o) => ({
   currency: o.currency || 'NGN',
   customer: { name: o.customer?.name, email: o.customer?.email },
   items: (o.items || []).map((i) => ({ name: i.name, image: i.image, variant: i.variant, quantity: i.quantity, price: i.price })),
+  trackingNumber: o.trackingNumber || null,
+  estimatedDelivery: o.estimatedDelivery || null,
   createdAt: o.createdAt,
 });
 

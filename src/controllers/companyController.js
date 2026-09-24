@@ -202,6 +202,10 @@ exports.updateStoreSettings = async (req, res, next) => {
       if (ds.estimatedDeliveryDays !== undefined) company.deliverySettings.estimatedDeliveryDays = Number(ds.estimatedDeliveryDays) || 3;
       if (ds.podEnabled !== undefined) company.deliverySettings.podEnabled = Boolean(ds.podEnabled);
       if (ds.podMaxAmount !== undefined) company.deliverySettings.podMaxAmount = Number(ds.podMaxAmount) || 0;
+      if (ds.defaultProvider !== undefined && ['gig', 'kwik', 'sendbox', 'manual'].includes(ds.defaultProvider)) {
+        company.deliverySettings.defaultProvider = ds.defaultProvider;
+      }
+      if (ds.manualTrackingUrlFormat !== undefined) company.deliverySettings.manualTrackingUrlFormat = String(ds.manualTrackingUrlFormat).slice(0, 300) || undefined;
     }
 
     if (giftCardSettings && typeof giftCardSettings === 'object') {

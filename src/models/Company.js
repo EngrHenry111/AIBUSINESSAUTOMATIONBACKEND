@@ -104,6 +104,22 @@ const companySchema = new mongoose.Schema({
     estimatedDeliveryDays: { type: Number, default: 3 },
     podEnabled: { type: Boolean, default: false },
     podMaxAmount: { type: Number, default: 50000 },
+
+    // ── Shipping provider integration (deliveryService.js) ────────────────
+    // Each merchant connects their OWN courier account — same reasoning as
+    // paymentSettings.paystackSubaccountCode: one shared platform-wide GIG/
+    // Kwik account couldn't sensibly bill or schedule pickups for hundreds of
+    // unrelated merchants. A company with no key configured here still gets
+    // deliveryService's per-provider env var as a fallback (see
+    // getProviderCredentials) — useful for a BizlyAI-negotiated shared
+    // account or local testing — but a merchant's own key always wins.
+    defaultProvider: { type: String, enum: ['gig', 'kwik', 'sendbox', 'manual'], default: 'manual' },
+    manualTrackingUrlFormat: String, // e.g. "https://mycourier.com/track/{trackingNumber}"
+    providers: {
+      gig: { apiKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
+      kwik: { apiKey: { type: String, select: false }, secretKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
+      sendbox: { apiKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
+    },
   },
 
   giftCardSettings: {

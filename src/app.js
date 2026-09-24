@@ -55,6 +55,7 @@ const procurementRoutes = require('./routes/procurementRoutes');
 const giftCardRoutes = require('./routes/giftCardRoutes');
 const subscriptionPlanRoutes = require('./routes/subscriptionPlanRoutes');
 const groupBuyRoutes = require('./routes/groupBuyRoutes');
+const deliveryRoutes = require('./routes/deliveryRoutes');
 const couponRoutes = require('./routes/couponRoutes');
 const marketplaceRoutes = require('./routes/marketplaceRoutes');
 const portalRoutes = require('./routes/portalRoutes');
@@ -250,6 +251,16 @@ app.use(`${API}/currency`, currencyRoutes);
 app.use(`${API}/contracts`, contractRoutes);
 app.use(`${API}/procurement`, procurementRoutes);
 app.use(`${API}/gift-cards`, giftCardRoutes);
+// delivery/group-buys are mounted BEFORE subscriptionPlanRoutes deliberately —
+// subscriptionPlanRoutes is mounted at the bare API root (its own routes are
+// /subscription-plans and /store-subscriptions) and starts with an
+// unconditional router.use(protect, enforceTenant). Express matches routers
+// in registration order by path prefix, and the bare API root is a prefix of
+// every other route below it — so any router with genuinely PUBLIC routes
+// (like deliveryRoutes' GET /delivery/track/:trackingNumber) MUST be
+// registered before it, or every request to it gets shadowed into that
+// blanket protect() and 401s before ever reaching its own routes.
+app.use(`${API}/delivery`, deliveryRoutes);
 app.use(API, subscriptionPlanRoutes);
 app.use(`${API}/group-buys`, groupBuyRoutes);
 app.use(`${API}/coupons`, couponRoutes);
