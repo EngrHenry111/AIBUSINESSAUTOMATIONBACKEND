@@ -101,28 +101,27 @@ async function sendPasswordReset(email, name, resetToken) {
   return send({ to: email, subject: 'Reset your BizlyAI password', html });
 }
 
-async function sendTeamInvite(email, name, inviterName, companyName, tempPassword) {
+// A link (reusing the same passwordResetToken mechanism as forgotPassword,
+// just with a longer expiry — see userController.inviteMember) rather than a
+// plaintext temporary password: nothing sensitive sits in an inbox, and the
+// invitee picks their own password before ever logging in.
+async function sendTeamInvite(email, name, inviterName, companyName, setupLink, role) {
   const html = baseTemplate('You\'ve Been Invited', `
     <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">You're Invited! 🎉</h2>
     <p style="color:#475569;margin:0 0 24px;">Hi ${name},</p>
     <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
       <strong>${inviterName}</strong> has invited you to join <strong>${companyName}</strong> on
-      BizlyAI — the AI-powered business operations platform.
+      BizlyAI — the AI-powered business operations platform${role ? ` as ${role}` : ''}.
     </p>
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin:24px 0;">
-      <p style="color:#475569;margin:0 0 8px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Your Login Details</p>
-      <p style="color:#0f172a;margin:4px 0;"><strong>Email:</strong> ${email}</p>
-      <p style="color:#0f172a;margin:4px 0;"><strong>Temporary Password:</strong> 
-        <code style="background:#e2e8f0;padding:2px 8px;border-radius:4px;font-size:14px;">${tempPassword}</code>
-      </p>
-    </div>
     <div style="text-align:center;margin:32px 0;">
-      <a href="${BASE_URL}/login" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
-        Log In Now
+      <a href="${setupLink}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        Set Your Password &amp; Get Started
       </a>
     </div>
     <p style="color:#94a3b8;font-size:13px;margin:0;">
-      Please change your password after your first login in Settings → Password.
+      This link expires in 7 days. If it expires, use "Forgot password" on the
+      login page with this email address to get a new link.<br/>
+      Or copy this link: <a href="${setupLink}" style="color:#6366f1;">${setupLink}</a>
     </p>
   `);
 

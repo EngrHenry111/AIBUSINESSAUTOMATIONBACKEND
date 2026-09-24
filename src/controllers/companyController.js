@@ -358,3 +358,71 @@ exports.testSMS = async (req, res, next) => {
     res.status(200).json({ success: true, message: `Test SMS sent to ${phone}` });
   } catch (err) { next(err); }
 };
+
+// ── Departments — organizational tags for team members (Finance, Sales,
+// Auditors, ...), separate from role (which still gates permissions). The
+// standard list in utils/departments.js is free for every company; adding a
+// new CUSTOM one is owner-only, same reasoning as role changes — anyone
+// could otherwise invent an unlimited number of departments. ──────────────
+const { DEFAULT_DEPARTMENTS } = require('../utils/departments');
+
+// ── GET /companies/departments ───────────────────────────────────────────
+exports.getDepartments = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.companyId).select('departments');
+    res.status(200).json({
+      success: true,
+      data: { standard: DEFAULT_DEPARTMENTS, custom: company.departments || [] },
+    });
+  } catch (err) { next(err); }
+};
+
+// ── POST /companies/departments (owner-only) ─────────────────────────────
+exports.addDepartment = async (req, res, next) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    if (!name || name.length > 60) return next(new AppError('Enter a department name (up to 60 characters).', 400));
+
+    const company = await Company.findById(req.companyId).select('departments');
+    const all = [...DEFAULT_DEPARTMENTS, ...(company.departments || [])];
+    if (all.some((d) => d.toLowerCase() === name.toLowerCase())) {
+      return next(new AppError('That department already exists.', 409));
+    }
+    if (company.departments.length >= 30) {
+      return next(new AppError('Maximum of 30 custom departments reached.', 400));
+    }
+
+    company.departments.push(name);
+    await company.save();
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'company.department_add', description: `Added department "${name}"`, ip: req.ip });
+
+    res.status(201).json({ success: true, data: { standard: DEFAULT_DEPARTMENTS, custom: company.departments } });
+  } catch (err) { next(err); }
+};
+
+// ── DELETE /companies/departments/:name (owner-only) ─────────────────────
+exports.deleteDepartment = async (req, res, next) => {
+  try {
+    const name = decodeURIComponent(req.params.name);
+    if (DEFAULT_DEPARTMENTS.some((d) => d.toLowerCase() === name.toLowerCase())) {
+      return next(new AppError('Standard departments cannot be removed.', 400));
+    }
+
+    const company = await Company.findById(req.companyId).select('departments');
+    const before = company.departments.length;
+    company.departments = company.departments.filter((d) => d.toLowerCase() !== name.toLowerCase());
+    if (company.departments.length === before) return next(new AppError('Department not found.', 404));
+    await company.save();
+
+    // Unassign anyone currently tagged with it — a deleted department left
+    // dangling on a user record would fail updateMemberDepartment's own
+    // validity check the next time anyone tried to edit them. Exact match is
+    // safe here (no regex/case-fold needed): a user's `department` is only
+    // ever set from this same company.departments list, so casing already
+    // matches whatever was stored.
+    await User.updateMany({ companyId: req.companyId, department: name }, { department: null });
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'company.department_remove', description: `Removed department "${name}"`, ip: req.ip });
+
+    res.status(200).json({ success: true, data: { standard: DEFAULT_DEPARTMENTS, custom: company.departments } });
+  } catch (err) { next(err); }
+};

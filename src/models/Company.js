@@ -113,6 +113,12 @@ const companySchema = new mongoose.Schema({
     expiryDays: { type: Number, default: 365 },
   },
 
+  // Custom departments this company added on top of the standard list in
+  // utils/departments.js (Finance, Sales, Auditors, ...) — owner-only to
+  // create (see companyController.addDepartment), assignable to any team
+  // member by a manager+ (see userController.updateMemberDepartment).
+  departments: { type: [String], default: [] },
+
   // ── Central marketplace listing (auto-listed whenever storeEnabled is
   // true; removed from browsing the moment the store is disabled — no
   // separate "listed" flag needed, see marketplaceController). ────────────

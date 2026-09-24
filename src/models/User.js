@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema({
     default: 'employee',
   },
   avatar: { type: String, default: null },
+  // Organizational tag (Finance, Sales, Auditors, ...) — purely descriptive,
+  // never used for permission checks. Role (above) still gates what a user
+  // can do; department is just which team they're on. See utils/departments.
+  department: { type: String, trim: true, maxlength: 60, default: null },
   status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
   refreshToken: { type: String, select: false },
   passwordResetToken: { type: String, select: false },
