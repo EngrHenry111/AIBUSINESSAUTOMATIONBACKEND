@@ -10,7 +10,7 @@ const CATEGORY_PATTERNS = {
   invoice: '^invoice\\.',
   order: '^order\\.',
   appointment: '^appointment\\.',
-  team: '^user\\.(invite|remove|role)',
+  team: '^(user\\.(invite|remove|role|department)|company\\.department_)',
   settings: '^(company\\.|user\\.profile|user\\.settings|settings\\.)',
   billing: '^(subscription\\.|payment\\.|billing\\.)',
   whatsapp: '^whatsapp\\.',

@@ -105,27 +105,29 @@ async function sendPasswordReset(email, name, resetToken) {
 // just with a longer expiry — see userController.inviteMember) rather than a
 // plaintext temporary password: nothing sensitive sits in an inbox, and the
 // invitee picks their own password before ever logging in.
-async function sendTeamInvite(email, name, inviterName, companyName, setupLink, role) {
-  const html = baseTemplate('You\'ve Been Invited', `
-    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">You're Invited! 🎉</h2>
+async function sendTeamInvite(email, name, inviterName, companyName, setupLink, role, isReminder = false) {
+  const heading = isReminder ? "Don't forget — you're invited! ⏰" : "You're Invited! 🎉";
+  const intro = isReminder
+    ? `Just a reminder — <strong>${inviterName}</strong> invited you to join <strong>${companyName}</strong> on BizlyAI${role ? ` as ${role}` : ''}, and you haven't set up your account yet.`
+    : `<strong>${inviterName}</strong> has invited you to join <strong>${companyName}</strong> on BizlyAI — the AI-powered business operations platform${role ? ` as ${role}` : ''}.`;
+
+  const html = baseTemplate(isReminder ? 'Reminder: You\'ve Been Invited' : 'You\'ve Been Invited', `
+    <h2 style="color:#0f172a;margin:0 0 8px;font-size:22px;">${heading}</h2>
     <p style="color:#475569;margin:0 0 24px;">Hi ${name},</p>
-    <p style="color:#475569;line-height:1.7;margin:0 0 24px;">
-      <strong>${inviterName}</strong> has invited you to join <strong>${companyName}</strong> on
-      BizlyAI — the AI-powered business operations platform${role ? ` as ${role}` : ''}.
-    </p>
+    <p style="color:#475569;line-height:1.7;margin:0 0 24px;">${intro}</p>
     <div style="text-align:center;margin:32px 0;">
       <a href="${setupLink}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
         Set Your Password &amp; Get Started
       </a>
     </div>
     <p style="color:#94a3b8;font-size:13px;margin:0;">
-      This link expires in 7 days. If it expires, use "Forgot password" on the
-      login page with this email address to get a new link.<br/>
+      This link expires in 7 days. If it expires, ask ${inviterName} to resend your invite.<br/>
       Or copy this link: <a href="${setupLink}" style="color:#6366f1;">${setupLink}</a>
     </p>
   `);
 
-  return send({ to: email, subject: `You've been invited to ${companyName} on BizlyAI`, html });
+  const subject = isReminder ? `Reminder: you're invited to ${companyName} on BizlyAI` : `You've been invited to ${companyName} on BizlyAI`;
+  return send({ to: email, subject, html });
 }
 
 async function sendWelcome(email, name, companyName) {

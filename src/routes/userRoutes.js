@@ -24,6 +24,8 @@ router.patch('/profile', avatarUpload, ctrl.updateProfile);
 router.patch('/change-password', [body('currentPassword').notEmpty(), body('newPassword').isLength({ min: 8 })], validate, ctrl.changePassword);
 router.get('/team', ctrl.getTeamMembers);
 router.post('/team/invite', isManager, [body('email').isEmail(), body('name').trim().notEmpty()], validate, ctrl.inviteMember);
+router.post('/team/bulk-invite', isManager, ctrl.bulkInviteMembers);
+router.post('/team/:id/resend-invite', isManager, ctrl.resendInvite);
 router.patch('/team/:id/role', isCompanyOwner, ctrl.updateMemberRole);
 router.patch('/team/:id/department', isManager, ctrl.updateMemberDepartment);
 router.delete('/team/:id', isManager, ctrl.removeMember);

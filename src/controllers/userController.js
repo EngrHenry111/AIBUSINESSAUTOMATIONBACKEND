@@ -101,19 +101,50 @@ exports.getTeamMembers = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// A manager may only bring in an employee; only the owner (or super_admin)
+// can bring in another manager — shared by inviteMember and bulkInviteMembers
+// so both enforce the exact same rule.
+function canInviteAs(inviterRole, role) {
+  if (!ASSIGNABLE_ROLES.includes(role)) return { message: 'Invalid role. Team members can be invited as manager or employee.', statusCode: 400 };
+  if (role === 'manager' && inviterRole !== 'company_owner' && inviterRole !== 'super_admin') {
+    return { message: 'Only the company owner can invite someone as a manager.', statusCode: 403 };
+  }
+  return null;
+}
+
+// Shared by inviteMember and bulkInviteMembers — creates the user with a
+// passwordResetToken-based setup link (see inviteMember's own comment for
+// why) and fires the invite email. Throws an AppError-shaped {message,
+// statusCode} on validation failure rather than calling next() itself, so
+// callers can decide how to report a single failure within a batch.
+async function createInvitedUser({ companyId, name, email, role, inviter, companyName }) {
+  const existing = await User.findOne({ email });
+  if (existing) { const e = new Error('Email already registered.'); e.statusCode = 409; throw e; }
+
+  const placeholderPassword = crypto.randomBytes(24).toString('hex');
+  const { token, hash } = generateResetToken();
+  const user = await User.create({
+    name, email, password: placeholderPassword, role, companyId, status: 'active',
+    passwordResetToken: hash,
+    passwordResetExpires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  });
+
+  const setupLink = `${clientUrl()}/reset-password/${token}`;
+  logger.info(`Team member invited: ${email} — setup link logged in case email delivery fails: ${setupLink}`);
+  emailService.sendTeamInvite(email, name, inviter.name, companyName, setupLink, role).then(() => {
+    logger.info(`✅ Invite email sent to ${email}`);
+  }).catch((err) => {
+    logger.warn(`⚠️  Invite email failed (${err.message}) — setup link logged above, share it manually if needed`);
+  });
+
+  return user;
+}
+
 exports.inviteMember = async (req, res, next) => {
   try {
     const { email, name, role = 'employee' } = req.body;
-    if (!ASSIGNABLE_ROLES.includes(role)) {
-      return next(new AppError('Invalid role. Team members can be invited as manager or employee.', 400));
-    }
-    // Only the owner can bring in another manager — a manager inviting a
-    // peer manager (or worse, repeatedly promoting invitees) is how one
-    // compromised manager account used to be able to take over a whole
-    // company's team. Employee-level invites stay open to any manager+.
-    if (role === 'manager' && req.user.role !== 'company_owner' && req.user.role !== 'super_admin') {
-      return next(new AppError('Only the company owner can invite someone as a manager.', 403));
-    }
+    const roleError = canInviteAs(req.user.role, role);
+    if (roleError) return next(new AppError(roleError.message, roleError.statusCode));
 
     const company = await Company.findById(req.companyId).select('limits companyName');
     const currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active' });
@@ -125,32 +156,7 @@ exports.inviteMember = async (req, res, next) => {
       return next(new AppError(`User limit reached (${company.limits.maxUsers}). Upgrade your plan to add more members.`, 403));
     }
 
-    const existing = await User.findOne({ email });
-    if (existing) return next(new AppError('Email already registered.', 409));
-
-    // A random password the invitee will never see or need — they set their
-    // own via the emailed link below (same passwordResetToken mechanism as
-    // forgotPassword, just a longer window since this is a first-time setup
-    // rather than an urgent reset).
-    const placeholderPassword = crypto.randomBytes(24).toString('hex');
-    const { token, hash } = generateResetToken();
-    const user = await User.create({
-      name, email,
-      password: placeholderPassword,
-      role,
-      companyId: req.companyId,
-      status: 'active',
-      passwordResetToken: hash,
-      passwordResetExpires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-    });
-
-    const setupLink = `${clientUrl()}/reset-password/${token}`;
-    logger.info(`Team member invited: ${email} — setup link logged in case email delivery fails: ${setupLink}`);
-    emailService.sendTeamInvite(email, name, req.user.name, company.companyName, setupLink, role).then(() => {
-      logger.info(`✅ Invite email sent to ${email}`);
-    }).catch((err) => {
-      logger.warn(`⚠️  Invite email failed (${err.message}) — setup link logged above, share it manually if needed`);
-    });
+    const user = await createInvitedUser({ companyId: req.companyId, name, email, role, inviter: req.user, companyName: company.companyName });
 
     await writeAuditLog({
       companyId: req.companyId, userId: req.user._id,
@@ -159,6 +165,93 @@ exports.inviteMember = async (req, res, next) => {
     });
 
     res.status(201).json({ success: true, data: user, message: 'Team member invited. They will receive an email to set up their account.' });
+  } catch (err) {
+    if (err.statusCode) return next(new AppError(err.message, err.statusCode));
+    next(err);
+  }
+};
+
+// ── POST /users/team/bulk-invite (manager+) ─────────────────────────────────
+// Accepts { members: [{ name, email, role }] } — e.g. parsed from a CSV on
+// the frontend. Each row is independent: one bad row (duplicate email,
+// invalid role, limit reached mid-batch) doesn't abort the rest. Returns a
+// per-row result so the UI can show exactly what happened to each invite.
+exports.bulkInviteMembers = async (req, res, next) => {
+  try {
+    const { members } = req.body;
+    if (!Array.isArray(members) || members.length === 0) {
+      return next(new AppError('Provide at least one team member to invite.', 400));
+    }
+    if (members.length > 100) return next(new AppError('Invite up to 100 members at a time.', 400));
+
+    const company = await Company.findById(req.companyId).select('limits companyName');
+    let currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active' });
+
+    const results = [];
+    for (const raw of members) {
+      const email = String(raw.email || '').trim().toLowerCase();
+      const name = String(raw.name || '').trim();
+      const role = raw.role === 'manager' ? 'manager' : 'employee';
+
+      if (!name || !/^\S+@\S+\.\S+$/.test(email)) {
+        results.push({ email: raw.email, status: 'failed', message: 'Missing or invalid name/email.' });
+        continue;
+      }
+      const roleError = canInviteAs(req.user.role, role);
+      if (roleError) { results.push({ email, status: 'failed', message: roleError.message }); continue; }
+      if (company.limits.maxUsers > 0 && currentCount >= company.limits.maxUsers) {
+        results.push({ email, status: 'failed', message: `User limit reached (${company.limits.maxUsers}).` });
+        continue;
+      }
+
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const user = await createInvitedUser({ companyId: req.companyId, name, email, role, inviter: req.user, companyName: company.companyName });
+        currentCount += 1;
+        results.push({ email, status: 'invited', id: user._id });
+      } catch (err) {
+        results.push({ email, status: 'failed', message: err.statusCode ? err.message : 'Could not invite this member.' });
+      }
+    }
+
+    const invitedCount = results.filter((r) => r.status === 'invited').length;
+    if (invitedCount > 0) {
+      await writeAuditLog({
+        companyId: req.companyId, userId: req.user._id,
+        action: 'user.invite', resource: 'User',
+        description: `Bulk-invited ${invitedCount} of ${members.length} team member(s)`, ip: req.ip,
+      });
+    }
+
+    res.status(200).json({ success: true, data: results, invited: invitedCount, failed: results.length - invitedCount });
+  } catch (err) { next(err); }
+};
+
+// ── POST /users/team/:id/resend-invite (manager+) ───────────────────────────
+// Only for someone who never logged in yet — resending would otherwise be a
+// backdoor way to force a fresh setup link (and invalidate the old one) onto
+// an account that's already active and in use.
+exports.resendInvite = async (req, res, next) => {
+  try {
+    const member = await User.findOne({ _id: req.params.id, companyId: req.companyId }).select('name email role lastLogin');
+    if (!member) return next(new AppError('Team member not found.', 404));
+    if (member.lastLogin) return next(new AppError('This member has already logged in — resend only applies to a pending invite.', 400));
+
+    const company = await Company.findById(req.companyId).select('companyName');
+    const { token, hash } = generateResetToken();
+    member.passwordResetToken = hash;
+    member.passwordResetExpires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    await member.save();
+
+    const setupLink = `${clientUrl()}/reset-password/${token}`;
+    emailService.sendTeamInvite(member.email, member.name, req.user.name, company.companyName, setupLink, member.role, true).then(() => {
+      logger.info(`✅ Invite reminder sent to ${member.email}`);
+    }).catch((err) => {
+      logger.warn(`⚠️  Invite reminder failed (${err.message}) — setup link: ${setupLink}`);
+    });
+
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.invite', resource: 'User', resourceId: member._id, description: `Resent invite to ${member.email}`, ip: req.ip });
+    res.status(200).json({ success: true, message: `Invite reminder sent to ${member.email}` });
   } catch (err) { next(err); }
 };
 
@@ -207,6 +300,7 @@ exports.updateMemberDepartment = async (req, res, next) => {
     );
     if (!member) return next(new AppError('Team member not found.', 404));
 
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.department_change', resource: 'User', resourceId: req.params.id, metadata: { department: department || null }, ip: req.ip });
     res.status(200).json({ success: true, data: member });
   } catch (err) { next(err); }
 };
