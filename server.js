@@ -124,6 +124,12 @@ async function bootstrap() {
     }, 60 * 60 * 1000);
     logger.info('✅ Store subscription processor scheduled (runs daily at 6am, checked hourly)');
 
+    // ── Group buys — settle expired deals (success or refund), checked hourly ──
+    const { checkExpiredGroupBuys } = require('./src/controllers/groupBuyController');
+    checkExpiredGroupBuys();
+    setInterval(checkExpiredGroupBuys, 60 * 60 * 1000);
+    logger.info('✅ Group buy expiry checker scheduled (runs hourly)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.
@@ -150,6 +156,12 @@ async function bootstrap() {
       // Join AI chat room
       socket.on('join_chat', (chatId) => {
         socket.join(`chat:${chatId}`);
+      });
+
+      // Public group-buy page — anonymous shoppers join this room to see
+      // live participant-count updates without needing any account.
+      socket.on('join_groupbuy', (groupBuyId) => {
+        if (groupBuyId) socket.join(`groupbuy:${groupBuyId}`);
       });
 
       // ── WhatsApp ──────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ const ctrl = require('../controllers/storefrontController');
 const customerCtrl = require('../controllers/storeCustomerController');
 const giftCardCtrl = require('../controllers/giftCardController');
 const subCtrl = require('../controllers/storeSubscriptionController');
+const groupBuyCtrl = require('../controllers/groupBuyController');
 
 const router = express.Router();
 router.use(publicStoreLimiter);
@@ -51,6 +52,13 @@ router.get('/:slug/my-subscriptions', loadStore, authenticateStoreCustomer, subC
 router.patch('/:slug/subscriptions/:id/pause', loadStore, authenticateStoreCustomer, subCtrl.pauseMySubscription);
 router.patch('/:slug/subscriptions/:id/resume', loadStore, authenticateStoreCustomer, subCtrl.resumeMySubscription);
 router.patch('/:slug/subscriptions/:id/cancel', loadStore, authenticateStoreCustomer, subCtrl.cancelMySubscription);
+
+// ── Group buys — fully public, no store-customer account needed to join ────
+router.get('/:slug/group-buys', groupBuyCtrl.getPublicGroupBuys);
+router.get('/:slug/group-buys/:shareCode', groupBuyCtrl.getPublicGroupBuy);
+router.post('/:slug/group-buys/:shareCode/join', groupBuyCtrl.joinGroupBuy);
+router.post('/:slug/group-buys/:shareCode/verify', groupBuyCtrl.verifyGroupBuyPayment);
+router.get('/:slug/group-buys/:shareCode/share', groupBuyCtrl.shareGroupBuy);
 
 // ── Store customer accounts — separate from the main BizlyAI login ───────
 router.post('/:slug/customer/register', authLimiter, loadStore, customerCtrl.registerStoreCustomer);
