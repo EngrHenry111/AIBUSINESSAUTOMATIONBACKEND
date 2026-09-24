@@ -106,6 +106,13 @@ const companySchema = new mongoose.Schema({
     podMaxAmount: { type: Number, default: 50000 },
   },
 
+  giftCardSettings: {
+    enabled: { type: Boolean, default: true },
+    minAmount: { type: Number, default: 500 },
+    maxAmount: { type: Number, default: 500000 },
+    expiryDays: { type: Number, default: 365 },
+  },
+
   // ── Central marketplace listing (auto-listed whenever storeEnabled is
   // true; removed from browsing the moment the store is disabled — no
   // separate "listed" flag needed, see marketplaceController). ────────────

@@ -133,6 +133,12 @@ exports.getStoreSettings = async (req, res, next) => {
           podEnabled: Boolean(d.podEnabled),
           podMaxAmount: d.podMaxAmount ?? 50000,
         },
+        giftCardSettings: {
+          enabled: company.giftCardSettings?.enabled !== false,
+          minAmount: company.giftCardSettings?.minAmount ?? 500,
+          maxAmount: company.giftCardSettings?.maxAmount ?? 500000,
+          expiryDays: company.giftCardSettings?.expiryDays ?? 365,
+        },
         marketplace: {
           category: company.marketplace?.category || 'Other',
           location: company.marketplace?.location || '',
@@ -154,7 +160,7 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (!company) return next(new AppError('Company not found.', 404));
 
     const { storeSlug, storeEnabled, description, announcement, banner,
-      primaryColor, showOutOfStock, allowBackorders, deliverySettings, marketplace } = req.body;
+      primaryColor, showOutOfStock, allowBackorders, deliverySettings, giftCardSettings, marketplace } = req.body;
 
     if (storeSlug !== undefined) {
       const slug = String(storeSlug).toLowerCase().trim();
@@ -198,6 +204,15 @@ exports.updateStoreSettings = async (req, res, next) => {
       if (ds.podMaxAmount !== undefined) company.deliverySettings.podMaxAmount = Number(ds.podMaxAmount) || 0;
     }
 
+    if (giftCardSettings && typeof giftCardSettings === 'object') {
+      if (!company.giftCardSettings) company.giftCardSettings = {};
+      const gcs = giftCardSettings;
+      if (gcs.enabled !== undefined) company.giftCardSettings.enabled = Boolean(gcs.enabled);
+      if (gcs.minAmount !== undefined) company.giftCardSettings.minAmount = Math.max(100, Number(gcs.minAmount) || 500);
+      if (gcs.maxAmount !== undefined) company.giftCardSettings.maxAmount = Number(gcs.maxAmount) || 500000;
+      if (gcs.expiryDays !== undefined) company.giftCardSettings.expiryDays = Math.max(1, Number(gcs.expiryDays) || 365);
+    }
+
     if (marketplace && typeof marketplace === 'object') {
       if (!company.marketplace) company.marketplace = {};
       const MARKETPLACE_CATEGORIES = ['Fashion', 'Food', 'Electronics', 'Beauty', 'Home', 'Services', 'Agriculture', 'Other'];
@@ -222,6 +237,7 @@ exports.updateStoreSettings = async (req, res, next) => {
           ...company.deliverySettings.toObject?.() ?? company.deliverySettings,
           feesByState: company.deliverySettings.feesByState ? Object.fromEntries(company.deliverySettings.feesByState) : {},
         } : null,
+        giftCardSettings: company.giftCardSettings || null,
         marketplace: company.marketplace || null,
       },
     });

@@ -19,8 +19,10 @@ const cache = require('../utils/cache');
 const logger = require('../utils/logger');
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const CustomerPoints = require('../models/CustomerPoints');
+const GiftCard = require('../models/GiftCard');
 const { deductPointsFromCustomer } = require('../utils/loyaltyPoints');
 const { awardLoyaltyForOrder } = require('./orderController');
+const { redeemGiftCardForOrder } = require('./giftCardController');
 const { resolveLineItem, computeDeliveryFee, applyCoupon } = require('../utils/storefrontCheckout');
 const { cloudinary } = require('../config/cloudinary');
 
@@ -122,6 +124,11 @@ const publicStore = (company) => ({
     estimatedDeliveryDays: company.deliverySettings?.estimatedDeliveryDays ?? 3,
     podEnabled: Boolean(company.deliverySettings?.podEnabled),
     podMaxAmount: company.deliverySettings?.podMaxAmount ?? 50000,
+  },
+  giftCardSettings: {
+    enabled: company.giftCardSettings?.enabled !== false,
+    minAmount: company.giftCardSettings?.minAmount ?? 500,
+    maxAmount: company.giftCardSettings?.maxAmount ?? 500000,
   },
 });
 
@@ -536,7 +543,7 @@ const PAYMENT_METHODS = ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_
 exports.initializeStorePayment = async (req, res, next) => {
   try {
     const {
-      items = [], customer = {}, redeemPoints = 0, couponCode,
+      items = [], customer = {}, redeemPoints = 0, couponCode, giftCardCode,
       paymentMethod = 'paystack', shippingState, shippingCity, notes, cartSessionId,
     } = req.body;
     if (!PAYMENT_METHODS.includes(paymentMethod)) return next(new AppError('Invalid payment method.', 400));
@@ -599,6 +606,22 @@ exports.initializeStorePayment = async (req, res, next) => {
       }
     }
 
+    // Gift card redemption — like loyalty above, re-validated server-side
+    // against the real balance. The actual deduction only happens once the
+    // order is truly placed (finalizePlacedOrder), never at initialization.
+    let giftCardApplied = null;
+    if (giftCardCode) {
+      const giftCard = await GiftCard.findOne({ companyId: company._id, code: String(giftCardCode).trim().toUpperCase() });
+      if (!giftCard || giftCard.status !== 'active' || giftCard.balance <= 0 || giftCard.expiresAt < new Date()) {
+        return next(new AppError('This gift card is not valid or has no remaining balance.', 400));
+      }
+      const giftCardRedeemed = Math.min(giftCard.balance, total - 1);
+      if (giftCardRedeemed > 0) {
+        total = Math.round((total - giftCardRedeemed) * 100) / 100;
+        giftCardApplied = { code: giftCard.code, amount: giftCardRedeemed };
+      }
+    }
+
     const customerPayload = {
       name: String(customer.name).slice(0, 120),
       email: customer.email,
@@ -609,7 +632,7 @@ exports.initializeStorePayment = async (req, res, next) => {
     };
     const orderMeta = {
       items: resolvedItems, subtotal, deliveryFee, discount, couponCode: appliedCouponCode,
-      loyaltyRedeemed, customer: customerPayload, notes: notes ? String(notes).slice(0, 500) : undefined,
+      loyaltyRedeemed, giftCardApplied, customer: customerPayload, notes: notes ? String(notes).slice(0, 500) : undefined,
     };
 
     // ── Pay on Delivery — order placed now, paid in cash on arrival ──────
@@ -717,6 +740,7 @@ const publicOrder = (o) => ({
   deliveryFee: o.deliveryFee,
   discount: o.discount,
   loyaltyDiscount: o.loyaltyDiscount,
+  giftCardRedeemed: o.giftCardRedeemed,
   total: o.total,
   currency: o.currency || 'NGN',
   customer: { name: o.customer?.name, email: o.customer?.email },
@@ -815,6 +839,12 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
     });
   }
 
+  // Gift card balance — same "only now that the order is real" rule as
+  // loyalty points above.
+  if (order.giftCardCode && order.giftCardRedeemed > 0) {
+    await redeemGiftCardForOrder(company._id, order.giftCardCode, order.giftCardRedeemed, order);
+  }
+
   // Loyalty points earned — only for orders paid in full right now. Pay on
   // delivery / bank transfer / the unpaid half of a split payment haven't
   // actually been paid yet, so earning is deferred to whenever the order
@@ -882,6 +912,8 @@ async function createDirectOrder(company, meta, { io } = {}) {
     couponCode: meta.couponCode,
     loyaltyPointsUsed: meta.loyaltyRedeemed?.points || 0,
     loyaltyDiscount: meta.loyaltyRedeemed?.discount || 0,
+    giftCardCode: meta.giftCardApplied?.code,
+    giftCardRedeemed: meta.giftCardApplied?.amount || 0,
     total: meta.total,
     currency: 'NGN',
     paymentMethod: meta.paymentMethod,
@@ -933,6 +965,8 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
       couponCode: meta.couponCode,
       loyaltyPointsUsed: meta.loyaltyRedeemed?.points || 0,
       loyaltyDiscount: meta.loyaltyRedeemed?.discount || 0,
+      giftCardCode: meta.giftCardApplied?.code,
+      giftCardRedeemed: meta.giftCardApplied?.amount || 0,
       total: orderTotal,
       currency: 'NGN',
       paymentMethod: isSplit ? 'split_payment' : 'paystack',

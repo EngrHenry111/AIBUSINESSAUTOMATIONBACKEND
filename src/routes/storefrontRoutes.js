@@ -11,6 +11,7 @@ const { uploadReceipt } = require('../config/cloudinary');
 const { loadStore, authenticateStoreCustomer } = require('../middleware/storeCustomerAuth');
 const ctrl = require('../controllers/storefrontController');
 const customerCtrl = require('../controllers/storeCustomerController');
+const giftCardCtrl = require('../controllers/giftCardController');
 
 const router = express.Router();
 router.use(publicStoreLimiter);
@@ -29,6 +30,16 @@ router.get('/:slug/track/:orderNumber', ctrl.trackOrder);
 router.post('/:slug/orders/:orderNumber/bank-proof', uploadReceipt.single('proof'), ctrl.uploadBankProof);
 router.post('/:slug/checkout', ctrl.initializeStorePayment);
 router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
+
+// ── Gift cards — purchase/verify/validate only. Redemption itself is NOT a
+// public endpoint: it happens server-side inside checkout (see
+// initializeStorePayment/finalizePlacedOrder), which computes how much of
+// the total the card actually covers rather than trusting a client-sent
+// amount. A public "redeem this amount from this code" endpoint would let
+// anyone drain a stolen/guessed code without ever placing an order. ───────
+router.post('/:slug/gift-cards/purchase', giftCardCtrl.purchaseGiftCard);
+router.post('/:slug/gift-cards/verify', giftCardCtrl.verifyGiftCardPurchase);
+router.post('/:slug/gift-cards/validate', giftCardCtrl.validateGiftCard);
 
 // ── Store customer accounts — separate from the main BizlyAI login ───────
 router.post('/:slug/customer/register', authLimiter, loadStore, customerCtrl.registerStoreCustomer);

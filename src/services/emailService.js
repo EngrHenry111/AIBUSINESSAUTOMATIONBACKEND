@@ -225,6 +225,56 @@ async function sendMeetingInvite(email, name, meeting, organizerName) {
   return send({ to: email, subject: `Meeting Scheduled: ${meeting.title}`, html });
 }
 
+// Gift card delivery — deliberately its own festive header rather than the
+// standard baseTemplate banner, since this email IS the gift, not a
+// transactional receipt.
+function sendGiftCardEmail({ to, recipientName, buyerName, message, code, amount, currency, storeName, storeLogo, storeUrl, expiresAt }) {
+  const naira = (n) => `${currency || 'NGN'} ${Number(n || 0).toLocaleString()}`;
+  const expiryStr = expiresAt ? new Date(expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : null;
+
+  const html = `<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f8fafc;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;">
+    <tr><td style="padding:36px 24px;">
+      <div style="background:linear-gradient(135deg,#7c3aed,#d97706);border-radius:20px 20px 0 0;padding:32px 28px;text-align:center;">
+        ${storeLogo ? `<img src="${storeLogo}" alt="${storeName}" style="height:40px;margin-bottom:10px;"/>` : ''}
+        <h1 style="color:#fff;margin:0;font-size:24px;">You've received a gift card! 🎁</h1>
+        <p style="color:#fde68a;margin:8px 0 0;font-size:14px;">From ${buyerName || 'a friend'} — sent via ${storeName || 'BizlyAI'}</p>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 20px 20px;padding:32px 28px;">
+        <p style="color:#334155;font-size:15px;margin:0 0 18px;">Hi ${recipientName || 'there'},</p>
+        ${message ? `<blockquote style="margin:0 0 22px;padding:14px 18px;background:#faf5ff;border-left:4px solid #a855f7;border-radius:8px;color:#581c87;font-style:italic;font-size:14px;">"${message}"</blockquote>` : ''}
+
+        <div style="text-align:center;margin:0 0 24px;">
+          <div style="font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">Gift Card Value</div>
+          <div style="font-size:36px;font-weight:800;color:#7c3aed;">${naira(amount)}</div>
+        </div>
+
+        <div style="text-align:center;margin:0 0 24px;">
+          <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">Your gift card code</div>
+          <div style="display:inline-block;font-family:'Courier New',monospace;font-size:20px;font-weight:700;letter-spacing:0.05em;color:#0f172a;background:#f1f5f9;border:2px dashed #cbd5e1;border-radius:12px;padding:14px 22px;">${code}</div>
+        </div>
+
+        <p style="color:#475569;font-size:13.5px;text-align:center;margin:0 0 6px;">Valid at <strong>${storeName || 'the store'}</strong></p>
+        ${expiryStr ? `<p style="color:#94a3b8;font-size:12.5px;text-align:center;margin:0 0 24px;">Valid until ${expiryStr}</p>` : ''}
+
+        ${storeUrl ? `<div style="text-align:center;margin:0 0 24px;"><a href="${storeUrl}" style="background:linear-gradient(135deg,#7c3aed,#d97706);color:#fff;padding:13px 32px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px;">Shop Now</a></div>` : ''}
+
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:8px 0 16px;"/>
+        <p style="color:#94a3b8;font-size:12px;text-align:center;margin:0;">Enter this code at checkout to redeem. Powered by BizlyAI.</p>
+      </div>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  return send({
+    to,
+    subject: `🎁 You've received a ${naira(amount)} gift card${storeName ? ` for ${storeName}` : ''}!`,
+    html,
+    text: `You've received a ${naira(amount)} gift card from ${buyerName || 'a friend'}, valid at ${storeName || 'the store'}. Code: ${code}${expiryStr ? `. Valid until ${expiryStr}.` : ''}`,
+  });
+}
+
 // Google Calendar "add event" link — no ICS generation needed, works from any inbox.
 function googleCalendarLink(meeting) {
   if (!meeting.scheduledAt) return null;
@@ -442,6 +492,7 @@ module.exports = {
   sendSubscriptionWarning,
   sendPaymentFailed,
   sendVerificationEmail,
+  sendGiftCardEmail,
   baseTemplate,
   send,
 };

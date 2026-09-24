@@ -25,6 +25,8 @@ const orderSchema = new mongoose.Schema({
   couponCode: String,
   loyaltyPointsUsed: { type: Number, default: 0 },
   loyaltyDiscount: { type: Number, default: 0 },
+  giftCardCode: String,
+  giftCardRedeemed: { type: Number, default: 0 },
   paymentMethod: {
     type: String,
     enum: ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_payment'],

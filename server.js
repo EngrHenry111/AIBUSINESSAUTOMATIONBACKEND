@@ -102,6 +102,12 @@ async function bootstrap() {
     }, 60 * 60 * 1000);
     logger.info('✅ Loyalty points expiry sweep scheduled (runs daily at 3am, checked hourly)');
 
+    // ── Scheduled gift card delivery — checked hourly ───────────────────────
+    const { sendScheduledGiftCards } = require('./src/controllers/giftCardController');
+    sendScheduledGiftCards();
+    setInterval(sendScheduledGiftCards, 60 * 60 * 1000);
+    logger.info('✅ Scheduled gift card delivery checker scheduled (runs hourly)');
+
     // ── Abandoned cart recovery emails — checked hourly ─────────────────────
     const { checkAbandonedCarts } = require('./src/utils/abandonedCartReminders');
     checkAbandonedCarts();
