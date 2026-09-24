@@ -114,6 +114,16 @@ async function bootstrap() {
     setInterval(checkAbandonedCarts, 60 * 60 * 1000);
     logger.info('✅ Abandoned cart reminder checker scheduled (runs hourly)');
 
+    // ── Store subscriptions — recurring deliveries, daily at 6am ────────────
+    const { processStoreSubscriptions } = require('./src/utils/storeSubscriptionProcessor');
+    processStoreSubscriptions().catch((e) => logger.error(`processStoreSubscriptions (startup) failed: ${e.message}`));
+    setInterval(() => {
+      if (new Date().getHours() === 6) {
+        processStoreSubscriptions().catch((e) => logger.error(`processStoreSubscriptions failed: ${e.message}`));
+      }
+    }, 60 * 60 * 1000);
+    logger.info('✅ Store subscription processor scheduled (runs daily at 6am, checked hourly)');
+
     // ── Storefront order reconciliation (safety net) ───────────────────────
     // Catches any order the webhook AND the customer-return path both missed
     // by asking Paystack directly for recent successful transactions.

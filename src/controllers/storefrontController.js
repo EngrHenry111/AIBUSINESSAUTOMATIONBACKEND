@@ -996,6 +996,11 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
 exports.fulfilStorefrontOrder = fulfilStorefrontOrder;
 exports.findStore = findStore;
 exports.publicProduct = publicProduct;
+// Reused by storeSubscriptionController's recurring-delivery processor so a
+// subscription's auto-created order gets identical stock/email/SMS/socket
+// handling to a normal storefront order, instead of a second copy of it.
+exports.finalizePlacedOrder = finalizePlacedOrder;
+exports.nextOrderNumber = nextOrderNumber;
 
 // ── Email builders ─────────────────────────────────────────────────
 function orderRows(order) {

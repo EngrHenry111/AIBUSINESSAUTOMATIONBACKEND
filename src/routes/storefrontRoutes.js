@@ -12,6 +12,7 @@ const { loadStore, authenticateStoreCustomer } = require('../middleware/storeCus
 const ctrl = require('../controllers/storefrontController');
 const customerCtrl = require('../controllers/storeCustomerController');
 const giftCardCtrl = require('../controllers/giftCardController');
+const subCtrl = require('../controllers/storeSubscriptionController');
 
 const router = express.Router();
 router.use(publicStoreLimiter);
@@ -40,6 +41,16 @@ router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
 router.post('/:slug/gift-cards/purchase', giftCardCtrl.purchaseGiftCard);
 router.post('/:slug/gift-cards/verify', giftCardCtrl.verifyGiftCardPurchase);
 router.post('/:slug/gift-cards/validate', giftCardCtrl.validateGiftCard);
+
+// ── Store subscriptions — browsing is public; subscribing/managing needs a
+// store account (pause/resume/cancel/history all live on that account). ───
+router.get('/:slug/subscription-plans', subCtrl.getPublicPlans);
+router.post('/:slug/subscribe', loadStore, authenticateStoreCustomer, subCtrl.subscribe);
+router.get('/:slug/subscribe/verify/:reference', loadStore, authenticateStoreCustomer, subCtrl.verifySubscription);
+router.get('/:slug/my-subscriptions', loadStore, authenticateStoreCustomer, subCtrl.getMySubscriptions);
+router.patch('/:slug/subscriptions/:id/pause', loadStore, authenticateStoreCustomer, subCtrl.pauseMySubscription);
+router.patch('/:slug/subscriptions/:id/resume', loadStore, authenticateStoreCustomer, subCtrl.resumeMySubscription);
+router.patch('/:slug/subscriptions/:id/cancel', loadStore, authenticateStoreCustomer, subCtrl.cancelMySubscription);
 
 // ── Store customer accounts — separate from the main BizlyAI login ───────
 router.post('/:slug/customer/register', authLimiter, loadStore, customerCtrl.registerStoreCustomer);
