@@ -12,6 +12,21 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
+const { pick } = require('../utils/pick');
+
+// Top-level meeting fields a general edit is allowed to touch. Excludes
+// companyId (Object.assign(existing, req.body) used to let a client
+// overwrite it directly), and every array/section that already has its own
+// dedicated endpoint (agenda, attendance, resolutions, actionItems,
+// attachments, minutes) plus internal-only bookkeeping (nextOccurrenceCreated,
+// previousMinutesConfirmed*, reminders, ai) that a generic edit must never
+// be able to forge.
+const MEETING_EDITABLE_FIELDS = [
+  'title', 'description', 'meetingType', 'referenceNumber', 'location',
+  'chairman', 'secretary', 'scheduledAt', 'duration', 'participants',
+  'externalParticipants', 'transcript', 'transcriptFile', 'status',
+  'quorumRequired', 'isRecurring', 'recurringInterval',
+];
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -147,7 +162,7 @@ exports.updateMeeting = async (req, res, next) => {
     if (!existing) return next(new AppError('Meeting not found.', 404));
 
     const wasCompleted = existing.status === 'completed';
-    Object.assign(existing, req.body);
+    Object.assign(existing, pick(req.body, MEETING_EDITABLE_FIELDS));
     await existing.save();
 
     // Recurring: auto-create the next occurrence the moment this one is
@@ -269,7 +284,7 @@ exports.updateAgendaItem = async (req, res, next) => {
     if (!meeting) return next(new AppError('Meeting not found.', 404));
     const item = meeting.agenda.id(req.params.itemId);
     if (!item) return next(new AppError('Agenda item not found.', 404));
-    Object.assign(item, req.body);
+    Object.assign(item, pick(req.body, ['number', 'title', 'presenter', 'timeAllocated', 'notes', 'completed']));
     await meeting.save();
     res.status(200).json({ success: true, data: meeting });
   } catch (err) { next(err); }

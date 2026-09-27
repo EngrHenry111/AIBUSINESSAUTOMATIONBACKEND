@@ -241,10 +241,17 @@ exports.connectProvider = async (req, res, next) => {
 
     const company = await Company.findById(req.companyId);
     if (!company.deliverySettings.providers) company.deliverySettings.providers = {};
-    company.deliverySettings.providers[provider] = { apiKey: apiKey.trim(), secretKey: secretKey?.trim() || undefined, connected: true };
+    // A fresh secret every (re)connect — this is what closes the webhook
+    // auth gap (see handleWebhook): whatever URL the merchant pastes into
+    // the provider's dashboard next must carry it as ?secret=.
+    const webhookSecret = crypto.randomBytes(24).toString('hex');
+    company.deliverySettings.providers[provider] = {
+      apiKey: apiKey.trim(), secretKey: secretKey?.trim() || undefined, webhookSecret, connected: true,
+    };
     await company.save();
 
-    res.status(200).json({ success: true, message: `${PROVIDERS[provider].name} connected.` });
+    const webhookUrl = `${(process.env.API_URL || '').replace(/\/+$/, '')}/api/v1/delivery/webhook/${provider}?secret=${webhookSecret}`;
+    res.status(200).json({ success: true, message: `${PROVIDERS[provider].name} connected.`, data: { webhookUrl } });
   } catch (err) { next(err); }
 };
 
@@ -294,18 +301,37 @@ exports.getShipments = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// ── Webhooks — public, best-effort field matching (see file header re: no
-// verified signature scheme for GIG/Kwik; Sendbox's callback_url payload
-// shape also isn't in their public docs). Accepts a handful of common field
-// names per provider rather than one exact documented shape. ───────────────
+// ── Webhooks — best-effort field matching (see file header re: no verified
+// signature scheme for GIG/Kwik; Sendbox's callback_url payload shape also
+// isn't in their public docs, so there's no HMAC to check either). Without
+// ANY check here, a tracking number — shown publicly on the tracking page,
+// not a secret — would be enough for anyone to POST a fake "delivered"
+// event: false loyalty-point awards, spurious status-change emails to the
+// real customer, corrupted fulfilment records. Since none of these
+// providers' real signing schemes are available to verify against, BizlyAI
+// controls the mitigation instead: each provider is configured (in their own
+// dashboard, by whoever connects the account) with a webhook URL that
+// includes a random, per-company secret as a query param, checked below
+// against that company's *WEBHOOK_SECRET before anything is trusted. ───────
 async function handleWebhook(provider, req, res) {
   try {
     const body = req.body || {};
-    const trackingNumber = body.tracking_code || body.trackingNumber || body.waybillNumber || body.code || body.tracking_number || body.reference;
-    if (!trackingNumber) return res.status(400).json({ received: true, error: 'No tracking identifier in payload' });
+    const trackingNumberForAuth = body.tracking_code || body.trackingNumber || body.waybillNumber || body.code || body.tracking_number || body.reference;
+    if (!trackingNumberForAuth) return res.status(400).json({ received: true, error: 'No tracking identifier in payload' });
 
-    const shipment = await Shipment.findOne({ trackingNumber, provider });
-    if (!shipment) return res.status(200).json({ received: true }); // unknown shipment — ack anyway, nothing to update
+    const candidateShipment = await Shipment.findOne({ trackingNumber: trackingNumberForAuth, provider });
+    if (!candidateShipment) return res.status(200).json({ received: true }); // unknown shipment — ack anyway, nothing to update
+
+    const company = await Company.findById(candidateShipment.companyId).select('+deliverySettings.providers.gig.webhookSecret +deliverySettings.providers.kwik.webhookSecret +deliverySettings.providers.sendbox.webhookSecret');
+    const expectedSecret = company?.deliverySettings?.providers?.[provider]?.webhookSecret;
+    if (expectedSecret && req.query.secret !== expectedSecret) {
+      logger.warn(`${provider} webhook: bad secret for tracking number ${trackingNumberForAuth}`);
+      return res.status(200).json({ received: true }); // ack (never reveal validity to a prober) but do nothing
+    }
+    if (!expectedSecret) {
+      logger.warn(`${provider} webhook received with no webhookSecret configured for company ${candidateShipment.companyId} — accepting unauthenticated (set one up in Delivery Settings to close this).`);
+    }
+    const shipment = candidateShipment;
 
     const rawStatus = body.status_code || body.status?.code || body.status || body.current_status;
     const normalized = normalizeWebhookStatus(provider, rawStatus);

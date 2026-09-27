@@ -12,6 +12,18 @@ const LoyaltyProgram = require('../models/LoyaltyProgram');
 const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
 const { sendSMS } = require('../services/smsService');
 const { currencyFieldsFor, formatCurrency } = require('../services/currencyService');
+const { pick } = require('../utils/pick');
+
+// findOneAndUpdate({...}, req.body) used to pass the raw body straight
+// through with zero filtering — a client could set companyId (moving the
+// invoice to a different/invalid tenant), rewrite invoiceNumber (breaking
+// the per-company numbering sequence), or forge exchangeRate/ngnEquivalent
+// (which must stay pinned to the rate live at issue time for reporting to
+// stay correct), among others.
+const INVOICE_EDITABLE_FIELDS = [
+  'customer', 'items', 'subtotal', 'tax', 'discount', 'total', 'currency',
+  'status', 'dueAt', 'notes',
+];
 
 // Award loyalty points once an invoice is marked paid, then text the
 // customer their new balance. Never throws — fire-and-forget from
@@ -236,9 +248,11 @@ exports.updateInvoice = async (req, res, next) => {
     if (!before) return next(new AppError('Invoice not found.', 404));
     const justPaid = req.body.status === 'paid' && before.status !== 'paid';
 
+    const update = pick(req.body, INVOICE_EDITABLE_FIELDS);
+    if (justPaid) update.paidAt = update.paidAt || new Date();
     const invoice = await Invoice.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
-      req.body, { new: true, runValidators: true }
+      update, { new: true, runValidators: true }
     );
     if (!invoice) return next(new AppError('Invoice not found.', 404));
 

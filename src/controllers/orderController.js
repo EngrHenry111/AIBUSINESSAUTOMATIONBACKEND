@@ -11,6 +11,19 @@ const { recordCustomerTransaction } = require('../utils/customerSync');
 const { sendOrderConfirmationSMS, sendOrderDeliveredSMS, sendSMS } = require('../services/smsService');
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
+const { pick } = require('../utils/pick');
+
+// What a staff member is allowed to edit on an existing order. Deliberately
+// excludes companyId (Object.assign(order, req.body) used to let a client
+// overwrite it directly, silently moving the order to a different/invalid
+// tenant), orderNumber/source/paystackReference/stockApplied/pointsAwarded/
+// loyalty-and-gift-card fields (all internal bookkeeping set exclusively by
+// the checkout/fulfilment pipeline, never by a manual edit) and timestamps.
+const ORDER_EDITABLE_FIELDS = [
+  'customer', 'items', 'subtotal', 'deliveryFee', 'discount', 'couponCode',
+  'paymentMethod', 'status', 'paymentStatus', 'trackingNumber', 'carrier',
+  'shippingAddress', 'estimatedDelivery', 'total', 'currency', 'notes',
+];
 
 // Award loyalty points once an order is delivered (or, for storefront orders,
 // as soon as payment is confirmed), then text the customer their new
@@ -157,7 +170,7 @@ exports.updateOrder = async (req, res, next) => {
     if (statusChanged) {
       order.timeline.push({ status: newStatus, description: `Status changed to ${newStatus}`, timestamp: new Date() });
     }
-    Object.assign(order, req.body);
+    Object.assign(order, pick(req.body, ORDER_EDITABLE_FIELDS));
 
     if (statusChanged) {
       if (newStatus === 'delivered') order.deliveredAt = order.deliveredAt || new Date();

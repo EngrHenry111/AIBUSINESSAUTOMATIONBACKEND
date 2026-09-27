@@ -115,10 +115,16 @@ const companySchema = new mongoose.Schema({
     // account or local testing — but a merchant's own key always wins.
     defaultProvider: { type: String, enum: ['gig', 'kwik', 'sendbox', 'manual'], default: 'manual' },
     manualTrackingUrlFormat: String, // e.g. "https://mycourier.com/track/{trackingNumber}"
+    // webhookSecret: generated server-side when the provider is connected
+    // (see deliveryController.connectProvider) and given to the merchant to
+    // paste into that provider's webhook-URL setup — checked on every
+    // inbound webhook (see deliveryController.handleWebhook) since none of
+    // gig/kwik/sendbox's real signature schemes are available to verify
+    // against instead.
     providers: {
-      gig: { apiKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
-      kwik: { apiKey: { type: String, select: false }, secretKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
-      sendbox: { apiKey: { type: String, select: false }, connected: { type: Boolean, default: false } },
+      gig: { apiKey: { type: String, select: false }, webhookSecret: { type: String, select: false }, connected: { type: Boolean, default: false } },
+      kwik: { apiKey: { type: String, select: false }, secretKey: { type: String, select: false }, webhookSecret: { type: String, select: false }, connected: { type: Boolean, default: false } },
+      sendbox: { apiKey: { type: String, select: false }, webhookSecret: { type: String, select: false }, connected: { type: Boolean, default: false } },
     },
   },
 

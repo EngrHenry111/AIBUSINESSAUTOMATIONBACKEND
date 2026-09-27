@@ -10,9 +10,18 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
+const { pick } = require('../utils/pick');
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CANCELLED_ORDER = ['cancelled', 'refunded'];
+// approvedBy is deliberately excluded — it must only ever be set server-side
+// from req.user._id (see below), never trusted from the request body, or a
+// client could forge an arbitrary approver on their own expense.
+const EXPENSE_EDITABLE_FIELDS = [
+  'title', 'description', 'amount', 'currency', 'category', 'date',
+  'paymentMethod', 'receipt', 'vendor', 'isRecurring', 'recurringInterval',
+  'status', 'tags',
+];
 
 // ── helpers ───────────────────────────────────────────────────────────
 async function uploadReceiptFile(localPath, companyId) {
@@ -270,8 +279,7 @@ exports.updateExpense = async (req, res, next) => {
     const expense = await Expense.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!expense) return next(new AppError('Expense not found.', 404));
 
-    const body = { ...req.body };
-    delete body.companyId; delete body.createdBy;
+    const body = pick(req.body, EXPENSE_EDITABLE_FIELDS);
     if (body.amount != null && !(Number(body.amount) > 0)) return next(new AppError('Amount must be greater than zero.', 400));
     if (typeof body.tags === 'string') body.tags = body.tags.split(',').map((t) => t.trim()).filter(Boolean);
     if (body.isRecurring === 'true') body.isRecurring = true;
@@ -282,7 +290,9 @@ exports.updateExpense = async (req, res, next) => {
       catch (e) { logger.warn(`Receipt upload failed: ${e.message}`); }
     }
 
+    const wasApproved = expense.status === 'approved';
     Object.assign(expense, body);
+    if (body.status === 'approved' && !wasApproved) expense.approvedBy = req.user._id;
     await expense.save();
 
     cache.del(`dashboard_${req.companyId}`);

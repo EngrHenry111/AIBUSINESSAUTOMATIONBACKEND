@@ -4,15 +4,18 @@ const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
 const { enforceTenant } = require('../middleware/tenantMiddleware');
 const { isManager } = require('../middleware/roleMiddleware');
+const { publicStoreLimiter } = require('../middleware/rateLimitMiddleware');
 const ctrl = require('../controllers/deliveryController');
 
 const router = express.Router();
 
-// ── Public — no auth, no tenant scoping (see controller comments) ──────────
-router.get('/track/:trackingNumber', ctrl.trackShipment);
-router.post('/webhook/gig', ctrl.gigWebhook);
-router.post('/webhook/kwik', ctrl.kwikWebhook);
-router.post('/webhook/sendbox', ctrl.sendboxWebhook);
+// ── Public — no auth, no tenant scoping (see controller comments). Same
+// tighter per-IP limiter every other unauthenticated storefront route gets,
+// on top of the generalLimiter app.js already applies to all of /api. ─────
+router.get('/track/:trackingNumber', publicStoreLimiter, ctrl.trackShipment);
+router.post('/webhook/gig', publicStoreLimiter, ctrl.gigWebhook);
+router.post('/webhook/kwik', publicStoreLimiter, ctrl.kwikWebhook);
+router.post('/webhook/sendbox', publicStoreLimiter, ctrl.sendboxWebhook);
 
 // ── Protected (store owner/manager) ─────────────────────────────────────────
 router.use(protect, enforceTenant);

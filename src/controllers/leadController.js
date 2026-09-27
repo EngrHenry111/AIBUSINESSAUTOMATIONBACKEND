@@ -8,8 +8,19 @@ const { generateStructured } = require('../services/groqService');
 const { cleanAIText } = require('../utils/cleanAIText');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
+const { pick } = require('../utils/pick');
 
 const LEAD_STATUSES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
+// `activities`/`notes` are append-only threads managed by dedicated actions
+// (the $push below, and the notes endpoint) — never bulk-replaceable via a
+// generic edit. companyId/createdBy/ai are excluded for the same reason as
+// every other controller fixed alongside this one: `{...req.body}` used to
+// let a client overwrite them directly.
+const LEAD_EDITABLE_FIELDS = [
+  'name', 'email', 'phone', 'company', 'position', 'source', 'status',
+  'score', 'value', 'currency', 'assignedTo', 'tags', 'description',
+  'lastContactedAt', 'nextFollowUpAt',
+];
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // `notes` is now a thread; never let a plain string from an older client land
@@ -76,7 +87,7 @@ exports.updateLead = async (req, res, next) => {
     const prev = await Lead.findOne({ _id: req.params.id, companyId: req.companyId }).select('status');
     if (!prev) return next(new AppError('Lead not found.', 404));
 
-    const update = { ...req.body };
+    const update = pick(req.body, LEAD_EDITABLE_FIELDS);
     // Log a status change onto the activity trail
     if (update.status && update.status !== prev.status) {
       update.$push = {

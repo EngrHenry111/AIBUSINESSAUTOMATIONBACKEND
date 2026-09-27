@@ -5,6 +5,16 @@ const { runAgent } = require('../services/groqService');
 const { cleanAIText } = require('../utils/cleanAIText');
 const videoCall = require('../services/videoCallService');
 const { AppError } = require('../middleware/errorMiddleware');
+const { pick } = require('../utils/pick');
+
+// findOneAndUpdate({...}, req.body) used to pass the raw body straight
+// through — a client could set companyId (moving the appointment to a
+// different/invalid tenant even though the query filter matched it under
+// the OLD companyId) or forge the Daily.co video-call fields directly.
+const APPOINTMENT_EDITABLE_FIELDS = [
+  'title', 'description', 'customer', 'staff', 'scheduledAt', 'duration',
+  'status', 'type', 'location', 'isVirtual', 'meetingLink', 'notes',
+];
 
 exports.getAppointments = async (req, res, next) => {
   try {
@@ -54,7 +64,7 @@ exports.updateAppointment = async (req, res, next) => {
   try {
     const appt = await Appointment.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
-      req.body, { new: true, runValidators: true }
+      pick(req.body, APPOINTMENT_EDITABLE_FIELDS), { new: true, runValidators: true }
     );
     if (!appt) return next(new AppError('Appointment not found.', 404));
     res.status(200).json({ success: true, data: appt });

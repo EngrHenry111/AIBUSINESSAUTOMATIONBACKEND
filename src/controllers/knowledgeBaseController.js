@@ -4,6 +4,11 @@ const KnowledgeBase = require('../models/KnowledgeBase');
 const Document = require('../models/Document');
 const DocumentChunk = require('../models/DocumentChunk');
 const { AppError } = require('../middleware/errorMiddleware');
+const { pick } = require('../utils/pick');
+// isDefault/documentsCount/createdBy/companyId are internal — a client
+// setting isDefault:true could make an arbitrary KB masquerade as the
+// company's default; documentsCount is a maintained counter, not user data.
+const KB_EDITABLE_FIELDS = ['name', 'description', 'color', 'icon'];
 
 exports.getKnowledgeBases = async (req, res, next) => {
   try {
@@ -41,7 +46,7 @@ exports.updateKnowledgeBase = async (req, res, next) => {
   try {
     const kb = await KnowledgeBase.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
-      req.body, { new: true }
+      pick(req.body, KB_EDITABLE_FIELDS), { new: true }
     );
     if (!kb) return next(new AppError('Knowledge base not found.', 404));
     res.status(200).json({ success: true, data: kb });

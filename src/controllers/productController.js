@@ -10,8 +10,20 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
+const { pick } = require('../utils/pick');
 
 const REASONS = ['restock', 'sale', 'damage', 'lost', 'return', 'manual', 'correction'];
+// What a staff member is allowed to edit on an existing product.
+// Object.assign(product, body) used to let a client overwrite companyId
+// (moving the product to a different/invalid tenant) plus internal
+// counters — sold, ratings, reviews, viewCount, wishlistCount, createdBy —
+// none of which a product-edit form should ever be able to set directly.
+// `stock` is handled separately just below (existing special-case logic).
+const PRODUCT_EDITABLE_FIELDS = [
+  'name', 'description', 'category', 'sku', 'price', 'costPrice', 'currency',
+  'images', 'status', 'tags', 'weight', 'unit', 'variants', 'isFlashSale',
+  'flashSalePrice', 'flashSaleEndsAt', 'bundle', 'relatedProducts', 'isFeatured',
+];
 const genSku = () => `BIZ-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
 function isLow(p) {
@@ -265,8 +277,7 @@ exports.updateProduct = async (req, res, next) => {
 
     // Apply everything except a direct stock.quantity jump (log that separately)
     const stockFromBody = body.stock;
-    delete body.stock;
-    Object.assign(product, body);
+    Object.assign(product, pick(body, PRODUCT_EDITABLE_FIELDS));
     if (stockFromBody) {
       product.stock.lowStockThreshold = stockFromBody.lowStockThreshold ?? product.stock.lowStockThreshold;
       product.stock.trackStock = stockFromBody.trackStock ?? product.stock.trackStock;
