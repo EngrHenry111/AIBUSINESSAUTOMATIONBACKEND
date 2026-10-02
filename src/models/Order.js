@@ -27,6 +27,8 @@ const orderSchema = new mongoose.Schema({
   loyaltyDiscount: { type: Number, default: 0 },
   giftCardCode: String,
   giftCardRedeemed: { type: Number, default: 0 },
+  // 'bank_transfer' is legacy only — the storefront no longer offers it
+  // (receipt uploads can't be trusted); kept so older orders still load.
   paymentMethod: {
     type: String,
     enum: ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_payment'],
@@ -39,7 +41,7 @@ const orderSchema = new mongoose.Schema({
     secondAmount: Number,
     secondPaidAt: Date,
   },
-  bankTransferProof: String, // Cloudinary URL, customer-uploaded
+  bankTransferProof: String, // legacy — receipt uploads were removed
   deliveryProof: String, // Cloudinary URL, uploaded when marking delivered
   // Guards loyalty-points awarding against double-crediting — a storefront
   // order can earn points at 'confirmed' (payment success) and later also

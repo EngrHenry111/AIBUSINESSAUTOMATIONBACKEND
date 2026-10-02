@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('fs');
 const Company = require('../models/Company');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
@@ -24,7 +23,6 @@ const { deductPointsFromCustomer } = require('../utils/loyaltyPoints');
 const { awardLoyaltyForOrder } = require('./orderController');
 const { redeemGiftCardForOrder } = require('./giftCardController');
 const { resolveLineItem, computeDeliveryFee, applyCoupon } = require('../utils/storefrontCheckout');
-const { cloudinary } = require('../config/cloudinary');
 
 const clientUrl = () =>
   (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -490,55 +488,12 @@ exports.trackOrder = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// ── POST /store/:slug/orders/:id/bank-proof ──────────────────────────
-// Public — the customer uploads their transfer screenshot right after
-// placing a bank_transfer order. Requires the matching email as a
-// lightweight ownership check, same reasoning as trackOrder above.
-exports.uploadBankProof = async (req, res, next) => {
-  try {
-    const company = await findStore(req.params.slug);
-    const email = String(req.body.email || '').trim().toLowerCase();
-    if (!req.file) return next(new AppError('No image received.', 400));
-    if (!email) { fs.unlink(req.file.path, () => {}); return next(new AppError('Enter the email used for this order.', 400)); }
-
-    // Identified by orderNumber (not _id) — the storefront never learns an
-    // order's internal Mongo id, same as trackOrder().
-    const order = await Order.findOne({ orderNumber: req.params.orderNumber, companyId: company._id, 'customer.email': email });
-    if (!order) { fs.unlink(req.file.path, () => {}); return next(new AppError('Order not found.', 404)); }
-
-    let url;
-    if (cloudinary) {
-      const r = await cloudinary.uploader.upload(req.file.path, { folder: `business-ai/${company._id}/payment-proofs`, resource_type: 'image' });
-      fs.unlink(req.file.path, () => {});
-      url = r.secure_url;
-    } else {
-      url = `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${req.file.path.split(/[\\/]/).pop()}`;
-    }
-
-    order.bankTransferProof = url;
-    order.timeline.push({ status: order.status, description: 'Customer uploaded bank transfer proof', timestamp: new Date() });
-    await order.save();
-
-    const owner = await User.findById(company.owner).select('name email');
-    if (owner?.email) {
-      emailService.send({
-        to: owner.email,
-        subject: `Payment proof uploaded — order ${order.orderNumber}`,
-        html: emailService.baseTemplate('Payment Proof Uploaded', `
-          <h2 style="color:#0f172a;margin:0 0 6px;">Bank transfer proof received</h2>
-          <p style="color:#475569;font-size:14px;margin:0 0 16px;">${order.customer?.name || 'A customer'} uploaded a payment screenshot for order <strong>${order.orderNumber}</strong> (${naira(order.total)}).</p>
-          <p><a href="${url}" style="color:#6366f1;">View the uploaded proof</a></p>
-          <p style="margin:20px 0 0;"><a href="${clientUrl()}/orders" style="background:#6366f1;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-size:14px;">Review in BizlyAI</a></p>
-        `),
-      }).catch(() => {});
-    }
-
-    res.status(200).json({ success: true, data: { bankTransferProof: url } });
-  } catch (err) { next(err); }
-};
-
 // ── POST /store/:slug/checkout ─────────────────────────────────────
-const PAYMENT_METHODS = ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_payment'];
+// Manual bank transfer (customer uploads a receipt) was removed — a
+// screenshot proves nothing and is trivially faked. Every online payment
+// now goes through Paystack, and an order only exists once Paystack itself
+// reports the charge as successful (webhook / verify / reconciliation).
+const PAYMENT_METHODS = ['paystack', 'pay_on_delivery', 'split_payment'];
 
 exports.initializeStorePayment = async (req, res, next) => {
   try {
@@ -548,9 +503,9 @@ exports.initializeStorePayment = async (req, res, next) => {
     } = req.body;
     if (!PAYMENT_METHODS.includes(paymentMethod)) return next(new AppError('Invalid payment method.', 400));
 
-    // Bank transfer and pay-on-delivery don't touch Paystack at checkout time,
-    // so they don't need a subaccount configured — only the two card/transfer
-    // paths that actually charge through Paystack do.
+    // Pay-on-delivery doesn't touch Paystack at checkout time, so it doesn't
+    // need a subaccount configured — only the two paths that actually charge
+    // through Paystack do.
     const needsPaystack = paymentMethod === 'paystack' || paymentMethod === 'split_payment';
     const company = await findStore(req.params.slug, { requirePayments: needsPaystack });
 
@@ -647,23 +602,6 @@ exports.initializeStorePayment = async (req, res, next) => {
       return res.status(201).json({ success: true, data: { order: publicOrder(order), total, directOrder: true } });
     }
 
-    // ── Bank Transfer — order placed now, awaiting the owner's manual approval ──
-    if (paymentMethod === 'bank_transfer') {
-      const order = await createDirectOrder(company, { ...orderMeta, total, paymentMethod: 'bank_transfer' }, { io: req.app.get('io') });
-      markCartRecovered(company._id, cartSessionId);
-      return res.status(201).json({
-        success: true,
-        data: {
-          order: publicOrder(order), total, directOrder: true,
-          bankDetails: {
-            bankName: company.paymentSettings?.bankName || null,
-            accountName: company.paymentSettings?.accountName || null,
-            accountNumber: company.paymentSettings?.accountNumber || null,
-          },
-        },
-      });
-    }
-
     // ── Paystack (full amount) or Split (50% now, 50% on delivery) ─────
     const chargeAmount = paymentMethod === 'split_payment' ? Math.round((total / 2) * 100) / 100 : total;
 
@@ -680,9 +618,17 @@ exports.initializeStorePayment = async (req, res, next) => {
         slug: company.storeSlug,
         paymentMethod,
         orderTotal: total,
+        // What Paystack must actually collect — fulfilStorefrontOrder()
+        // refuses to create the order if the settled amount is lower.
+        chargeAmount,
         cartSessionId,
         ...orderMeta,
+        // Paystack sends the shopper here if they hit "Cancel" on the
+        // payment page, instead of stranding them on paystack.com.
+        cancel_action: `${clientUrl()}/store/${company.storeSlug}/checkout?payment=cancelled`,
       },
+      // Where Paystack redirects after a payment attempt — OrderSuccess
+      // verifies the reference server-side before showing anything.
       callback_url: `${clientUrl()}/store/${company.storeSlug}/success`,
     });
 
@@ -712,8 +658,20 @@ exports.verifyStorePayment = async (req, res, next) => {
     }
 
     const vr = await paystackAPI('GET', `/transaction/verify/${encodeURIComponent(reference)}`);
-    if (!vr.status || vr.data?.status !== 'success') {
-      return next(new AppError('Payment has not been completed.', 400));
+    const txnStatus = vr.data?.status;
+    if (!vr.status || txnStatus !== 'success') {
+      // 'ongoing'/'pending'/'processing'/'queued' — Paystack is still waiting
+      // on the bank (common for transfer/USSD), so the page should keep
+      // polling. Anything else (abandoned, failed, reversed) means no money
+      // was received and the customer should go back and try again.
+      const pending = ['ongoing', 'pending', 'processing', 'queued'].includes(txnStatus);
+      return res.status(402).json({
+        success: false,
+        paymentStatus: pending ? 'pending' : 'failed',
+        message: pending
+          ? 'Your payment is still being processed by your bank.'
+          : 'Payment was not completed. You have not been charged.',
+      });
     }
     if (String(vr.data.metadata?.companyId) !== String(company._id)
       || vr.data.metadata?.type !== 'storefront_order') {
@@ -848,7 +806,7 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
   }
 
   // Loyalty points earned — only for orders paid in full right now. Pay on
-  // delivery / bank transfer / the unpaid half of a split payment haven't
+  // delivery / the unpaid half of a split payment haven't
   // actually been paid yet, so earning is deferred to whenever the order
   // later transitions to 'delivered' (see orderController.awardLoyaltyForOrder).
   if (order.paymentStatus === 'paid') {
@@ -898,7 +856,7 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
   logger.warn(`Storefront order ${order.orderNumber} placed for company ${company._id} (${naira(order.total)}, ${order.paymentMethod})`);
 }
 
-// ── Pay-on-delivery / bank-transfer order creation — no Paystack step,
+// ── Pay-on-delivery order creation — no Paystack step,
 // the order exists the moment the customer submits checkout. ─────────────
 async function createDirectOrder(company, meta, { io } = {}) {
   const orderNumber = await nextOrderNumber(company._id);
@@ -925,12 +883,36 @@ async function createDirectOrder(company, meta, { io } = {}) {
     stockApplied: false,
     timeline: [{
       status: 'pending',
-      description: meta.paymentMethod === 'pay_on_delivery' ? 'Order placed — to be paid on delivery' : 'Order placed — awaiting bank transfer confirmation',
+      description: 'Order placed — to be paid on delivery',
       timestamp: new Date(),
     }],
   });
   await finalizePlacedOrder(company, order, { io });
   return order;
+}
+
+// ── Last line of defence before an order is confirmed: Paystack must report
+// the charge as successful, in NGN, for at least the amount checkout asked
+// for. Every caller (webhook, verify, reconciliation) passes through here, so
+// no order is ever created for a payment Paystack didn't actually settle. ──
+function assertPaystackSettled(txn, meta) {
+  const orderTotal = Number(meta.orderTotal) || 0;
+  // Older transactions predate metadata.chargeAmount — recompute it exactly
+  // the way initializeStorePayment() did.
+  const expected = meta.chargeAmount != null
+    ? Number(meta.chargeAmount)
+    : (meta.paymentMethod === 'split_payment' ? Math.round((orderTotal / 2) * 100) / 100 : orderTotal);
+  const expectedKobo = Math.round(expected * 100);
+
+  const problems = [];
+  if (txn.status !== 'success') problems.push(`status=${txn.status}`);
+  if (txn.currency && txn.currency !== 'NGN') problems.push(`currency=${txn.currency}`);
+  if (!(expectedKobo > 0) || !(Number(txn.amount) >= expectedKobo)) problems.push(`amount=${txn.amount} expected>=${expectedKobo}`);
+
+  if (problems.length) {
+    logger.error(`Refusing storefront order for ${txn.reference}: ${problems.join(', ')}`);
+    throw new AppError('Payment could not be confirmed with Paystack.', 400);
+  }
 }
 
 // ── Shared fulfilment for Paystack payments (called by verify + webhook,
@@ -941,6 +923,7 @@ async function fulfilStorefrontOrder(company, txn, { io } = {}) {
   if (existing) return existing;
 
   const meta = txn.metadata || {};
+  assertPaystackSettled(txn, meta);
   const cust = meta.customer || {};
   // Checkout already resolved pricing/variants/stock at initialization —
   // trust the metadata's item list rather than re-resolving it, same as the

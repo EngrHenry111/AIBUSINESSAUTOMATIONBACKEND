@@ -58,6 +58,7 @@ const groupBuyRoutes = require('./routes/groupBuyRoutes');
 const deliveryRoutes = require('./routes/deliveryRoutes');
 const couponRoutes = require('./routes/couponRoutes');
 const marketplaceRoutes = require('./routes/marketplaceRoutes');
+const seoRoutes = require('./routes/seoRoutes');
 const portalRoutes = require('./routes/portalRoutes');
 const twoFactorRoutes = require('./routes/twoFactorRoutes');
 const auditRoutes = require('./routes/auditRoutes');
@@ -251,25 +252,23 @@ app.use(`${API}/currency`, currencyRoutes);
 app.use(`${API}/contracts`, contractRoutes);
 app.use(`${API}/procurement`, procurementRoutes);
 app.use(`${API}/gift-cards`, giftCardRoutes);
-// delivery/group-buys are mounted BEFORE subscriptionPlanRoutes deliberately —
-// subscriptionPlanRoutes is mounted at the bare API root (its own routes are
-// /subscription-plans and /store-subscriptions) and starts with an
-// unconditional router.use(protect, enforceTenant). Express matches routers
-// in registration order by path prefix, and the bare API root is a prefix of
-// every other route below it — so any router with genuinely PUBLIC routes
-// (like deliveryRoutes' GET /delivery/track/:trackingNumber) MUST be
-// registered before it, or every request to it gets shadowed into that
-// blanket protect() and 401s before ever reaching its own routes.
 app.use(`${API}/delivery`, deliveryRoutes);
-app.use(API, subscriptionPlanRoutes);
 app.use(`${API}/group-buys`, groupBuyRoutes);
 app.use(`${API}/coupons`, couponRoutes);
 app.use(`${API}/marketplace`, marketplaceRoutes);
+app.use(`${API}/seo`, seoRoutes);
 app.use(`${API}/messages`, messageRoutes);
 app.use(`${API}/search`, searchRoutes);
 app.use(`${API}/notifications`, notificationRoutes);
 app.use(`${API}/portal`, portalRoutes);
 app.use(`${API}/audit-logs`, auditRoutes);
+// subscriptionPlanRoutes MUST stay last. It is mounted at the bare API root
+// (its routes are /subscription-plans and /store-subscriptions) and starts
+// with an unconditional router.use(protect, enforceTenant). Express matches
+// routers in registration order by path prefix, so any router registered
+// AFTER it gets shadowed into that blanket protect() and 401s — this is what
+// broke the public /marketplace and /portal endpoints.
+app.use(API, subscriptionPlanRoutes);
 
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────

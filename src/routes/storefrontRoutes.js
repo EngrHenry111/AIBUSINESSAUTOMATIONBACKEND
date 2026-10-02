@@ -7,7 +7,6 @@
 // publicStore()/publicProduct() for the response-side half of that guarantee.
 const express = require('express');
 const { publicStoreLimiter, authLimiter } = require('../middleware/rateLimitMiddleware');
-const { uploadReceipt } = require('../config/cloudinary');
 const { loadStore, authenticateStoreCustomer } = require('../middleware/storeCustomerAuth');
 const ctrl = require('../controllers/storefrontController');
 const customerCtrl = require('../controllers/storeCustomerController');
@@ -29,7 +28,6 @@ router.get('/:slug/cart/recover/:sessionId', ctrl.recoverCart);
 router.get('/:slug/products/:id/recommendations', ctrl.getRecommendations);
 router.post('/:slug/coupon/validate', ctrl.validateCoupon);
 router.get('/:slug/track/:orderNumber', ctrl.trackOrder);
-router.post('/:slug/orders/:orderNumber/bank-proof', uploadReceipt.single('proof'), ctrl.uploadBankProof);
 router.post('/:slug/checkout', ctrl.initializeStorePayment);
 router.get('/:slug/verify/:reference', ctrl.verifyStorePayment);
 
