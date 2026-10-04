@@ -39,6 +39,7 @@
     "passport-google-oauth20": "^2.0.0",
     "passport-local": "^1.0.0",
     "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.15.2",
     "puppeteer": "^25.9.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",

@@ -427,7 +427,11 @@ async function sendVerificationEmail(email, name, link) {
 // level, so the attempt/success lines use it deliberately — this is exactly
 // the kind of visibility gap that made the SMTP timeout hard to diagnose
 // from Render's logs in the first place.
-async function sendEmail({ to, subject, html, text }) {
+// attachments: [{ filename, content: Buffer | base64 string }] — Resend caps
+// a message at 40MB after base64 encoding. replyTo/cc are optional; replyTo
+// defaults to support@bislyai.com for platform mail, but customer-facing
+// mail from a business should reply to that business.
+async function sendEmail({ to, subject, html, text, attachments, replyTo, cc }) {
   if (!RESEND_API_KEY) {
     logger.warn('RESEND_API_KEY not set — email skipped');
     return null;
@@ -441,7 +445,14 @@ async function sendEmail({ to, subject, html, text }) {
       {
         from: FROM,
         to: Array.isArray(to) ? to : [to],
-        reply_to: 'support@bislyai.com',
+        reply_to: replyTo || 'support@bislyai.com',
+        ...(cc && (Array.isArray(cc) ? cc.length : true) && { cc: Array.isArray(cc) ? cc : [cc] }),
+        ...(attachments?.length && {
+          attachments: attachments.map((a) => ({
+            filename: a.filename,
+            content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content,
+          })),
+        }),
         subject,
         html,
         text: text || html?.replace(/<[^>]*>/g, ''),

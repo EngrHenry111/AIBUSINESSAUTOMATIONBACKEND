@@ -350,17 +350,9 @@ exports.deleteInvoice = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// ── GET /invoices/:id/pdf — generate PDF
-exports.generatePDF = async (req, res, next) => {
-  try {
-    const { AppError } = require('../middleware/errorMiddleware');
-    const invoice = await require('../models/Invoice').findOne({
-      _id: req.params.id,
-      companyId: req.companyId,
-    });
-    if (!invoice) return next(new AppError('Invoice not found', 404));
-
-    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+// Printable invoice document — served by GET /invoices/:id/pdf and rendered
+// to a real PDF for email attachments (utils/htmlToPdf).
+function invoiceDocumentHtml(invoice, company) {
     const profile = company?.profile || {};
     const bank = bankDetailsBlock(company);
 
@@ -488,6 +480,21 @@ ${bank ? `
 </div>
 </body>
 </html>`;
+  return html;
+}
+
+// ── GET /invoices/:id/pdf — generate PDF
+exports.generatePDF = async (req, res, next) => {
+  try {
+    const { AppError } = require('../middleware/errorMiddleware');
+    const invoice = await require('../models/Invoice').findOne({
+      _id: req.params.id,
+      companyId: req.companyId,
+    });
+    if (!invoice) return next(new AppError('Invoice not found', 404));
+
+    const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
+    const html = invoiceDocumentHtml(invoice, company);
 
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Content-Disposition', `inline; filename="invoice-${invoice.invoiceNumber}.html"`);
@@ -636,6 +643,8 @@ async function dispatchInvoiceToCustomer(invoice, company) {
   }
 }
 exports.dispatchInvoiceToCustomer = dispatchInvoiceToCustomer;
+exports.invoiceDocumentHtml = invoiceDocumentHtml;
+exports.COMPANY_BRANDING_FIELDS = COMPANY_BRANDING_FIELDS;
 
 exports.sendInvoiceEmail = async (req, res, next) => {
   try {
