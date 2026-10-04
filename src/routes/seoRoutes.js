@@ -7,5 +7,7 @@ const ctrl = require('../controllers/seoController');
 
 const router = express.Router();
 router.get('/sitemap.xml', ctrl.getSitemap);
+router.get('/page-meta', ctrl.getPageMeta);
+router.get('/store/:slug/manifest.webmanifest', ctrl.getStoreManifest);
 
 module.exports = router;
