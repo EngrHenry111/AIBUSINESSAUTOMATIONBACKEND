@@ -813,6 +813,10 @@ async function finalizePlacedOrder(company, order, { io } = {}) {
     awardLoyaltyForOrder(order, company).catch(() => {});
   }
 
+  // Every placed store order gets its own invoice (unless the owner turned
+  // that off in store settings) — paid orders arrive already marked paid.
+  require('../utils/orderInvoice').autoInvoiceStoreOrder(company, order).catch(() => {});
+
   // Invalidate cached dashboards / notifications so the owner's next poll
   // (TopBar polls every 60s) sees this order immediately instead of a stale
   // result for up to the notifications cache's own 2-minute TTL on top of

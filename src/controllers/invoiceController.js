@@ -13,6 +13,8 @@ const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
 const { sendSMS } = require('../services/smsService');
 const { currencyFieldsFor, formatCurrency } = require('../services/currencyService');
 const { pick } = require('../utils/pick');
+const { createWithNumber } = require('../utils/invoiceNumbers');
+const { syncOrderFromInvoice } = require('../utils/orderInvoice');
 
 // findOneAndUpdate({...}, req.body) used to pass the raw body straight
 // through with zero filtering — a client could set companyId (moving the
@@ -93,11 +95,10 @@ exports.getInvoices = async (req, res, next) => {
 
 exports.createInvoice = async (req, res, next) => {
   try {
-    // Auto-generate invoice number
-    const count = await Invoice.countDocuments({ companyId: req.companyId });
-    const invoiceNumber = `INV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-
     const body = { ...req.body };
+    // Server-owned fields — the number is allocated below, and an order link
+    // is only ever made by POST /orders/:id/invoice.
+    delete body.invoiceNumber; delete body.orderId; delete body.orderNumber; delete body.matterId; delete body.matterNumber;
 
     // Resolve currency (explicit request wins, else the company's default)
     // and snapshot the exchange rate now — invoices should keep the rate
@@ -127,10 +128,9 @@ exports.createInvoice = async (req, res, next) => {
       };
     }
 
-    const invoice = await Invoice.create({
+    const invoice = await createWithNumber({
       ...body,
       companyId: req.companyId,
-      invoiceNumber,
       createdBy: req.user._id,
     });
     await recordCustomerTransaction({
@@ -256,7 +256,15 @@ exports.updateInvoice = async (req, res, next) => {
     );
     if (!invoice) return next(new AppError('Invoice not found.', 404));
 
-    if (justPaid) awardLoyaltyForInvoice(invoice, req.companyId).catch(() => {});
+    if (justPaid) {
+      awardLoyaltyForInvoice(invoice, req.companyId).catch(() => {});
+      syncOrderFromInvoice(invoice).catch(() => {});
+    }
+    // A cancelled matter invoice gives its time/disbursements back so they
+    // can be billed again.
+    if (invoice.matterId && invoice.status === 'cancelled' && before.status !== 'cancelled') {
+      await releaseMatterEntries(invoice);
+    }
 
     res.status(200).json({ success: true, data: invoice });
   } catch (err) { next(err); }
@@ -316,10 +324,28 @@ exports.getOverdueInvoices = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+async function releaseMatterEntries(invoice) {
+  const MatterEntry = require('../models/MatterEntry');
+  await MatterEntry.updateMany({ companyId: invoice.companyId, invoiceId: invoice._id }, { invoiceId: null });
+}
+
 exports.deleteInvoice = async (req, res, next) => {
   try {
+    const existing = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId }).select('matterId orderId');
+    if (!existing) return next(new AppError('Invoice not found.', 404));
+    if (existing.matterId) {
+      const TrustTransaction = require('../models/TrustTransaction');
+      if (await TrustTransaction.exists({ companyId: req.companyId, invoiceId: existing._id })) {
+        return next(new AppError('Client trust money was applied to this invoice, so it must stay on record. Cancel it instead.', 400));
+      }
+    }
     const invoice = await Invoice.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
     if (!invoice) return next(new AppError('Invoice not found.', 404));
+    if (invoice.matterId) await releaseMatterEntries(invoice);
+    if (invoice.orderId) {
+      const Order = require('../models/Order');
+      await Order.updateOne({ _id: invoice.orderId, companyId: req.companyId }, { $unset: { invoiceId: 1, invoiceNumber: 1 } });
+    }
     res.status(200).json({ success: true, message: 'Invoice deleted.' });
   } catch (err) { next(err); }
 };

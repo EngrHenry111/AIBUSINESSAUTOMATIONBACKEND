@@ -10,5 +10,6 @@ router.post('/', ctrl.createOrder);
 router.get('/:id', ctrl.getOrder);
 router.put('/:id', ctrl.updateOrder);
 router.delete('/:id', ctrl.deleteOrder);
+router.post('/:id/invoice', ctrl.createOrderInvoice);
 router.get('/track/:orderNumber', ctrl.getOrderStatus);
 module.exports = router;

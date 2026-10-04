@@ -12,6 +12,7 @@ const { sendOrderConfirmationSMS, sendOrderDeliveredSMS, sendSMS } = require('..
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const { awardPointsToCustomer } = require('../utils/loyaltyPoints');
 const { pick } = require('../utils/pick');
+const { createInvoiceFromOrder } = require('../utils/orderInvoice');
 
 // What a staff member is allowed to edit on an existing order. Deliberately
 // excludes companyId (Object.assign(order, req.body) used to let a client
@@ -226,6 +227,29 @@ exports.deleteOrder = async (req, res, next) => {
   try {
     const order = await Order.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
     if (!order) return next(new AppError('Order not found.', 404));
+    if (order.invoiceId) {
+      // Money already collected stays in revenue as a standalone invoice;
+      // an unpaid invoice for an order that no longer exists is void.
+      const Invoice = require('../models/Invoice');
+      await Invoice.updateOne({ _id: order.invoiceId, companyId: req.companyId, status: 'paid' }, { orderId: null });
+      await Invoice.updateOne({ _id: order.invoiceId, companyId: req.companyId, status: { $ne: 'paid' } }, { orderId: null, status: 'cancelled' });
+    }
     res.status(200).json({ success: true, message: 'Order deleted.' });
+  } catch (err) { next(err); }
+};
+
+// ── POST /orders/:id/invoice ─────────────────────────────────────────────
+// Creates the order's invoice, or returns the one it already has.
+exports.createOrderInvoice = async (req, res, next) => {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!order) return next(new AppError('Order not found.', 404));
+    if (['cancelled', 'refunded'].includes(order.status)) {
+      return next(new AppError(`Can't invoice a ${order.status} order.`, 400));
+    }
+    const dueInDays = Math.min(365, Math.max(0, Number(req.body?.dueInDays) || 7));
+    const { invoice, created } = await createInvoiceFromOrder(order, { userId: req.user._id, dueInDays });
+    require('../utils/cache').del(`dashboard_${req.companyId}`);
+    res.status(created ? 201 : 200).json({ success: true, created, data: invoice });
   } catch (err) { next(err); }
 };

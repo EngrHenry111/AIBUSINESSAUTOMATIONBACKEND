@@ -73,7 +73,23 @@ const orderSchema = new mongoose.Schema({
   }],
   notes: String,
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+  // Invoice generated from this order (see utils/orderInvoice.js).
+  invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
+  invoiceNumber: String,
 }, { timestamps: true });
+
+// Keep the linked invoice's payment state in step with the order, whichever
+// code path (dashboard, Paystack webhook, delivery update) changed it.
+orderSchema.pre('save', function trackPaymentChange(next) {
+  this.$locals.syncInvoice = Boolean(this.invoiceId) && !this.isNew
+    && (this.isModified('paymentStatus') || this.isModified('status'));
+  next();
+});
+orderSchema.post('save', function syncLinkedInvoice(doc) {
+  if (!doc.$locals.syncInvoice) return;
+  require('../utils/orderInvoice').syncInvoiceFromOrder(doc).catch(() => {});
+});
 
 orderSchema.index({ companyId: 1, status: 1 });
 orderSchema.index({ companyId: 1, orderNumber: 1 }, { unique: true });

@@ -71,10 +71,13 @@ function dailyBuckets(start, end) {
 // Revenue recognized = paid invoices (by paidAt) + all non-cancelled orders
 // (by createdAt, both source types) — the same "what actually came in"
 // definition used across this app (see adminController's marketplace GMV).
+// Invoices generated FROM an order (orderId set) are excluded everywhere
+// revenue sums invoices and orders together — that sale is already counted
+// via the order, and counting the invoice too would double it.
 async function computeRevenueForRange(companyId, start, end) {
   const [invoiceAgg, orderAgg] = await Promise.all([
     Invoice.aggregate([
-      { $match: { companyId, status: 'paid', paidAt: { $gte: start, $lte: end } } },
+      { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: start, $lte: end } } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
     ]),
     Order.aggregate([
@@ -120,7 +123,7 @@ exports.getRevenueAnalytics = async (req, res, next) => {
       const dayMap = new Map(buckets.map((d) => [dateKey(d), 0]));
       const [invoicesByDay, ordersByDay] = await Promise.all([
         Invoice.aggregate([
-          { $match: { companyId, status: 'paid', paidAt: { $gte: start, $lte: end } } },
+          { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: start, $lte: end } } },
           { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$paidAt' } }, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
         ]),
         Order.aggregate([
@@ -140,7 +143,7 @@ exports.getRevenueAnalytics = async (req, res, next) => {
       sixMonthsAgo.setHours(0, 0, 0, 0);
       const [invoicesByMonth, ordersByMonth] = await Promise.all([
         Invoice.aggregate([
-          { $match: { companyId, status: 'paid', paidAt: { $gte: sixMonthsAgo } } },
+          { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: sixMonthsAgo } } },
           { $group: { _id: { y: { $year: '$paidAt' }, m: { $month: '$paidAt' } }, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
         ]),
         Order.aggregate([
@@ -454,7 +457,7 @@ exports.getFinancialAnalytics = async (req, res, next) => {
           { $group: { _id: { y: { $year: '$date' }, m: { $month: '$date' } }, total: { $sum: '$amount' } } },
         ]),
         Invoice.aggregate([
-          { $match: { companyId, status: 'paid', paidAt: { $gte: sixMonthsAgo } } },
+          { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: sixMonthsAgo } } },
           { $group: { _id: { y: { $year: '$paidAt' }, m: { $month: '$paidAt' } }, total: { $sum: { $ifNull: ['$ngnEquivalent', '$total'] } } } },
         ]),
         Order.aggregate([

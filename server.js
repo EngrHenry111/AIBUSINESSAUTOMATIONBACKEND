@@ -73,6 +73,12 @@ async function bootstrap() {
     setInterval(checkMeetingReminders, 30 * 60 * 1000);
     logger.info('✅ Meeting reminder checker scheduled (runs every 30min)');
 
+    // ── Legal matters — hearing / deadline / limitation reminders ──────────
+    const { checkMatterReminders } = require('./src/utils/matterReminders');
+    checkMatterReminders();
+    setInterval(checkMatterReminders, 60 * 60 * 1000);
+    logger.info('✅ Matter key-date reminder checker scheduled (runs hourly)');
+
     // ── Overdue invoice reminders (email + SMS) ────────────────────────────
     const { checkOverdueInvoices } = require('./src/utils/invoiceReminders');
     checkOverdueInvoices();

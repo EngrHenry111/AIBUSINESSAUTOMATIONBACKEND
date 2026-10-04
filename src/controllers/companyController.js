@@ -124,6 +124,7 @@ exports.getStoreSettings = async (req, res, next) => {
           primaryColor: s.primaryColor || '#6366f1',
           showOutOfStock: s.showOutOfStock !== false,
           allowBackorders: Boolean(s.allowBackorders),
+          autoInvoiceOrders: s.autoInvoiceOrders !== false,
         },
         deliverySettings: {
           feesByState: d.feesByState ? Object.fromEntries(d.feesByState) : {},
@@ -160,7 +161,7 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (!company) return next(new AppError('Company not found.', 404));
 
     const { storeSlug, storeEnabled, description, announcement, banner,
-      primaryColor, showOutOfStock, allowBackorders, deliverySettings, giftCardSettings, marketplace } = req.body;
+      primaryColor, showOutOfStock, allowBackorders, autoInvoiceOrders, deliverySettings, giftCardSettings, marketplace } = req.body;
 
     if (storeSlug !== undefined) {
       const slug = String(storeSlug).toLowerCase().trim();
@@ -188,6 +189,7 @@ exports.updateStoreSettings = async (req, res, next) => {
     if (primaryColor !== undefined) company.storeSettings.primaryColor = /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : company.storeSettings.primaryColor;
     if (showOutOfStock !== undefined) company.storeSettings.showOutOfStock = Boolean(showOutOfStock);
     if (allowBackorders !== undefined) company.storeSettings.allowBackorders = Boolean(allowBackorders);
+    if (autoInvoiceOrders !== undefined) company.storeSettings.autoInvoiceOrders = Boolean(autoInvoiceOrders);
 
     if (deliverySettings && typeof deliverySettings === 'object') {
       if (!company.deliverySettings) company.deliverySettings = {};

@@ -96,6 +96,8 @@ const companySchema = new mongoose.Schema({
     primaryColor: { type: String, default: '#6366f1' },
     showOutOfStock: { type: Boolean, default: true },
     allowBackorders: { type: Boolean, default: false },
+    // Generate an invoice automatically for every placed storefront order.
+    autoInvoiceOrders: { type: Boolean, default: true },
   },
   deliverySettings: {
     feesByState: { type: Map, of: Number, default: {} }, // e.g. { Lagos: 2000, Abuja: 2500 }

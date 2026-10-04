@@ -39,7 +39,7 @@ async function uploadReceiptFile(localPath, companyId) {
 async function revenueBetween(companyId, start, end) {
   const [invAgg, ordAgg] = await Promise.all([
     Invoice.aggregate([
-      { $match: { companyId, status: 'paid', paidAt: { $gte: start, $lte: end } } },
+      { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: start, $lte: end } } },
       // ngnEquivalent is set for every invoice created after multi-currency
       // support shipped; fall back to `total` for older invoices (assumed
       // NGN, matching the pre-multi-currency behavior).

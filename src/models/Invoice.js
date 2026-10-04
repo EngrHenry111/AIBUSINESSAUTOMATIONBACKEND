@@ -53,6 +53,17 @@ const invoiceSchema = new mongoose.Schema({
   },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
+  // ── Linked order ──────────────────────────────────────────────────────
+  // Set when the invoice was generated from an order (utils/orderInvoice).
+  // Payment status syncs both ways, and revenue reports that add invoices
+  // to orders skip these so the sale isn't counted twice.
+  orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', default: null },
+  orderNumber: { type: String },
+
+  // Set when the invoice bills a legal matter's time and disbursements.
+  matterId: { type: mongoose.Schema.Types.ObjectId, ref: 'Matter', default: null },
+  matterNumber: { type: String },
+
   // ── Recurring invoices ────────────────────────────────────────────────
   // A recurring invoice IS a normal, usable invoice (the first occurrence)
   // that ALSO acts as an immutable template — the scheduler never edits its
@@ -86,5 +97,8 @@ invoiceSchema.index({ companyId: 1, dueAt: 1 });
 invoiceSchema.index({ companyId: 1, invoiceNumber: 1 }, { unique: true });
 invoiceSchema.index({ isRecurring: 1, 'recurringSettings.active': 1, 'recurringSettings.nextDueDate': 1 });
 invoiceSchema.index({ recurringParentId: 1 });
+invoiceSchema.index({ companyId: 1, matterId: 1 }, { partialFilterExpression: { matterId: { $type: 'objectId' } } });
+// One invoice per order — also makes concurrent "create invoice" clicks safe.
+invoiceSchema.index({ orderId: 1 }, { unique: true, partialFilterExpression: { orderId: { $type: 'objectId' } } });
 
 module.exports = mongoose.model('Invoice', invoiceSchema);

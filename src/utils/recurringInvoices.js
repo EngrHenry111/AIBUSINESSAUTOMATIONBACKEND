@@ -21,10 +21,7 @@ function addInterval(date, interval) {
   return next;
 }
 
-async function invoiceNumberFor(companyId) {
-  const count = await Invoice.countDocuments({ companyId });
-  return `INV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-}
+const { nextInvoiceNumber: invoiceNumberFor } = require('./invoiceNumbers');
 
 async function notifyOwner(company, subject, message) {
   try {
