@@ -23,7 +23,7 @@ const {
 const SETTINGS_FIELDS = [
   'schoolName', 'motto', 'address', 'phone', 'email', 'logo', 'currentSession', 'currentTerm',
   'termStart', 'termEnd', 'admissionsOpen', 'admissionNumberPrefix', 'onlinePaymentsEnabled',
-  'minimumOnlinePayment', 'caMax', 'gradingScale', 'nextTermBegins', 'reminders',
+  'minimumOnlinePayment', 'caMax', 'gradingScale', 'nextTermBegins', 'reminders', 'bankAccounts',
 ];
 const CLASS_FIELDS = ['name', 'level', 'section', 'classTeacher', 'subjects', 'subjectTeachers', 'capacity', 'active'];
 const STUDENT_FIELDS = [
@@ -101,6 +101,14 @@ exports.updateSettings = async (req, res, next) => {
       };
     }
     if (body.nextTermBegins === '') body.nextTermBegins = null;
+    if (body.bankAccounts !== undefined) {
+      const b = body.bankAccounts || {};
+      body.bankAccounts = {
+        enabled: Boolean(b.enabled),
+        autoCreate: b.autoCreate !== false,
+        preferredBank: ['wema-bank', 'titan-paystack', 'test-bank'].includes(b.preferredBank) ? b.preferredBank : 'wema-bank',
+      };
+    }
     if (req.body.slug !== undefined) {
       const slug = slugify(req.body.slug);
       if (slug !== settings.slug && await SchoolSettings.exists({ slug, _id: { $ne: settings._id } })) {
@@ -339,6 +347,13 @@ async function createStudentRecord(req, body, extra = {}) {
   try {
     const student = await Student.create({ ...data, ...extra, admissionNumber, companyId: req.companyId });
     if (student.classId && student.status === 'active') await billNewStudent(student, req.user._id);
+    // Their own transfer account, in the background (Paystack can be slow).
+    const settings = await getSettings(req.companyId);
+    if (settings.bankAccounts?.enabled && settings.bankAccounts?.autoCreate !== false && student.status === 'active') {
+      require('../utils/bankTransfers').createStudentAccount(req.companyId, student._id)
+        .then(() => emitSchool(req.app.get('io'), req.companyId, 'students', { studentId: student._id }))
+        .catch((e) => logger.error(`Auto bank account for ${student.admissionNumber} failed: ${e.message}`));
+    }
     return student;
   } catch (err) {
     if (err.code === 11000) throw new AppError(`Admission number ${admissionNumber} is already in use.`, 400);
@@ -413,6 +428,15 @@ exports.getStudent = async (req, res, next) => {
       success: true,
       data: {
         student, bills, payments, application, outstanding, feesHidden: teacher,
+        ...(!teacher && await (async () => {
+          const VirtualAccount = require('../models/VirtualAccount');
+          const BankTransfer = require('../models/BankTransfer');
+          const [bankAccount, credit] = await Promise.all([
+            VirtualAccount.findOne({ companyId: req.companyId, ownerType: 'student', ownerId: student._id }).select('accountNumber accountName bankName').lean(),
+            BankTransfer.find({ companyId: req.companyId, ownerType: 'student', ownerId: student._id, creditRemaining: { $gt: 0.001 } }).select('reference amount creditRemaining paidAt senderName').lean(),
+          ]);
+          return { bankAccount, transferCredit: credit, bankAccountsEnabled: Boolean(settings.bankAccounts?.enabled) };
+        })()),
         attendance: Object.fromEntries(attendance.map((a) => [a._id, a.count])),
         settings: { currentSession: settings.currentSession, currentTerm: settings.currentTerm },
       },

@@ -87,6 +87,7 @@ exports.getChild = async (req, res, next) => {
     const settings = await findSchoolBySlug(req.params.slug);
     const student = await allowedStudent(req, settings);
     const companyId = settings.companyId;
+    const bankAccount = await require('../models/VirtualAccount').findOne({ companyId, ownerType: 'student', ownerId: student._id }).select('accountNumber accountName bankName -_id').lean();
     const [bills, payments, attendance, scoredTerms] = await Promise.all([
       FeeBill.find({ companyId, studentId: student._id, status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }).limit(30)
         .select('billNumber title session term items total discount amountPaid balance dueDate status').lean(),
@@ -113,6 +114,7 @@ exports.getChild = async (req, res, next) => {
       success: true,
       data: {
         student: { _id: student._id, name: nameOf(student), admissionNumber: student.admissionNumber, className: student.classId?.name || null, status: student.status },
+        bankAccount,
         bills,
         outstanding: round2(bills.filter((b) => ['unpaid', 'partial'].includes(b.status)).reduce((s, b) => s + Math.max(0, b.balance), 0)),
         payments,

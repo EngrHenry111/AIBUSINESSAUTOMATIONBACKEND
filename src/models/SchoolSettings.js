@@ -67,6 +67,13 @@ const schoolSettingsSchema = new mongoose.Schema({
     ],
   },
 
+  // Dedicated bank account per student — transfers are matched automatically.
+  bankAccounts: {
+    enabled: { type: Boolean, default: false },
+    autoCreate: { type: Boolean, default: true }, // new students get one on enrolment
+    preferredBank: { type: String, default: 'wema-bank' }, // Paystack slug: wema-bank, titan-paystack (test-bank in test mode)
+  },
+
   // Fee reminders to parents of students who owe (utils/schoolFeeReminders.js).
   reminders: {
     autoEnabled: { type: Boolean, default: false },

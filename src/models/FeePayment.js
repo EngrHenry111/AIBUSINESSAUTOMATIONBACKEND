@@ -13,6 +13,7 @@ const feePaymentSchema = new mongoose.Schema({
   method: { type: String, enum: ['cash', 'bank_transfer', 'pos', 'cheque', 'online'], default: 'cash' },
   reference: { type: String, trim: true, maxlength: 120 },
   paystackReference: { type: String, trim: true },
+  transferId: { type: mongoose.Schema.Types.ObjectId, ref: 'BankTransfer' }, // paid by transfer to a dedicated account
   payerName: { type: String, trim: true, maxlength: 200 },
   payerEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
   note: { type: String, trim: true, maxlength: 500 },

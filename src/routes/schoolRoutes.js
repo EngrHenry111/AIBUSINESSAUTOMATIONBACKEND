@@ -20,6 +20,7 @@ const academic = require('../controllers/schoolAcademicController');
 const portal = require('../controllers/schoolPortalController');
 const plan = require('../controllers/schoolPlanController');
 const reports = require('../controllers/schoolReportController');
+const bank = require('../controllers/schoolBankController');
 
 const router = express.Router();
 
@@ -87,6 +88,12 @@ router.post('/fees/bills/:id/recalculate', isManager, fees.recalculateBill);
 router.get('/fees/debtors', FINANCE, fees.getDebtors);
 router.get('/fees/summary', FINANCE, fees.getFeeSummary);
 router.post('/fees/reminders', FINANCE, fees.sendReminders);
+
+router.post('/students/:id/bank-account', FINANCE, bank.createForStudent);
+router.post('/bank-accounts/bulk', FINANCE, bank.createBulk);
+router.get('/bank-accounts/summary', FINANCE, bank.summary);
+router.get('/transfers', FINANCE, bank.getTransfers);
+router.post('/transfers/:id/apply', FINANCE, bank.applyCredit);
 
 router.get('/fees/payments', FINANCE, fees.getPayments);
 router.post('/fees/payments', FINANCE, fees.recordPayment);

@@ -62,14 +62,15 @@ async function collectTargets(companyId, { studentIds, classId, billIds, notRemi
   };
 }
 
-function messagesFor(settings, student, bills, payLink) {
+function messagesFor(settings, student, bills, payLink, account) {
   const owed = bills.reduce((s, b) => s + b.balance, 0);
   const due = bills.map((b) => b.dueDate).filter(Boolean).sort((a, b) => new Date(a) - new Date(b))[0];
   const overdue = due && new Date(due) < new Date();
   const who = `${student.firstName} ${student.lastName} (${student.admissionNumber})`;
   const school = settings.schoolName || 'School';
   const dueText = due ? (overdue ? `, which was due on ${fmtDate(due)}` : `, due on ${fmtDate(due)}`) : '';
-  const sms = `${school}: ${who} has outstanding school fees of ${naira(owed)}${dueText}.${payLink ? ` Pay online: ${payLink}` : ''} Thank you.`;
+  const transferText = account ? ` Pay by transfer to ${account.bankName} ${account.accountNumber} (credited automatically).` : '';
+  const sms = `${school}: ${who} has outstanding school fees of ${naira(owed)}${dueText}.${transferText}${payLink ? ` Pay online: ${payLink}` : ''} Thank you.`;
   const text = `Dear ${student.guardian?.name || 'Parent'},\n\n${sms.replace(`${school}: `, '')}`;
   const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#0f172a">
     <h2 style="margin:0 0 12px">${escapeHtml(school)}</h2>
@@ -78,6 +79,7 @@ function messagesFor(settings, student, bills, payLink) {
     <table style="width:100%;border-collapse:collapse;font-size:14px;margin:12px 0">
       ${bills.map((b) => `<tr><td style="padding:6px 0;border-bottom:1px solid #e2e8f0">${escapeHtml(b.title || 'School fees')} · ${escapeHtml(b.session)} ${TERM_LABEL[b.term] || ''}</td><td style="padding:6px 0;border-bottom:1px solid #e2e8f0;text-align:right">${naira(b.balance)}</td></tr>`).join('')}
     </table>
+    ${account ? `<p style="padding:10px 12px;background:#f1f5f9;border-radius:8px">Pay by bank transfer to <b>${escapeHtml(account.bankName)} ${escapeHtml(account.accountNumber)}</b>${account.accountName ? ` (${escapeHtml(account.accountName)})` : ''} — it's ${escapeHtml(student.firstName)}'s own account, so the payment is credited automatically.</p>` : ''}
     ${payLink ? `<p><a href="${payLink}" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Pay online</a></p>` : '<p>Please pay at the school bursary.</p>'}
     <p style="color:#64748b;font-size:12px">If you have already paid, please ignore this message. ${escapeHtml([settings.phone, settings.email].filter(Boolean).join(' · '))}</p>
   </div>`;
@@ -103,6 +105,7 @@ async function sendFeeReminders(companyId, opts = {}) {
 
   const notRemindedWithinMs = opts.notRemindedWithinMs ?? 12 * HOUR;
   const { targets, skippedRecent } = await collectTargets(companyId, { ...opts, notRemindedWithinMs });
+  const accounts = new Map((await require('../models/VirtualAccount').find({ companyId, ownerType: 'student', ownerId: { $in: targets.map((t) => t.student._id) } }).lean()).map((a) => [String(a.ownerId), a]));
   const result = { students: 0, email: 0, sms: 0, whatsapp: 0, noContact: 0, failed: 0, skippedRecent, whatsappConnected: waReady };
 
   for (const { student, bills } of targets) {
@@ -120,7 +123,7 @@ async function sendFeeReminders(companyId, opts = {}) {
     );
     if (!claim.modifiedCount) { result.skippedRecent += 1; continue; }
     result.students += 1;
-    const m = messagesFor(settings, student, bills, payLink);
+    const m = messagesFor(settings, student, bills, payLink, accounts.get(String(student._id)));
     let reached = false;
     try {
       if (channels.email && g.email) {

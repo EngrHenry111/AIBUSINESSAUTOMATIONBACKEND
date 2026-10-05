@@ -38,11 +38,11 @@ function cleanItems(items) {
   return out;
 }
 
-function announcePayment(req, companyId, payment, student, bill, { online = false } = {}) {
+function announcePayment(req, companyId, payment, student, bill, { online = false, transfer = false } = {}) {
   const name = student ? `${student.lastName} ${student.firstName}` : 'a student';
   emitSchool(req.app.get('io'), companyId, 'payment', {
     paymentId: payment._id, billId: bill?._id, studentId: payment.studentId, amount: payment.amount,
-    message: `${naira(payment.amount)} ${online ? 'paid online' : 'received'} for ${name}`,
+    message: `${naira(payment.amount)} ${transfer ? 'paid online by bank transfer' : online ? 'paid online' : 'received'} for ${name}`,
   });
   req.app.get('io')?.to(`company:${companyId}`).emit('notification:refresh', { type: 'school_payment' });
 }
@@ -153,6 +153,7 @@ exports.generateBills = async (req, res, next) => {
     const structure = await findOwned(FeeStructure, req, req.params.id, 'Fee structure');
     if (!structure.active) return next(new AppError('Activate this fee structure first.', 400));
     const billed = await generateFor(structure, req.user._id);
+    if (billed) require('../utils/bankTransfers').applyStudentCredits(req.companyId, null, io(req)).catch(() => {});
     emitSchool(io(req), req.companyId, 'fees');
     res.status(200).json({ success: true, data: { billed }, message: billed ? `${billed} bill(s) created.` : 'Every student already has this bill.' });
   } catch (err) { next(err); }
@@ -218,6 +219,7 @@ exports.createBill = async (req, res, next) => {
       dueDate: req.body.dueDate || undefined,
       createdBy: req.user._id,
     });
+    require('../utils/bankTransfers').applyStudentCredits(req.companyId, [student._id], io(req)).catch(() => {});
     emitSchool(io(req), req.companyId, 'fees', { studentId: student._id });
     res.status(201).json({ success: true, data: bill });
   } catch (err) { next(err); }
@@ -428,6 +430,13 @@ exports.voidPayment = async (req, res, next) => {
     );
     if (!payment) return next(new AppError('Payment not found or already voided.', 404));
     const bill = await applyToBill(req.companyId, payment.billId, -payment.amount);
+    // Money that came in by transfer goes back to that transfer's credit,
+    // ready to apply to the right bill.
+    if (payment.transferId) {
+      const BankTransfer = require('../models/BankTransfer');
+      const t = await BankTransfer.findOneAndUpdate({ _id: payment.transferId }, { $inc: { creditRemaining: payment.amount } }, { new: true });
+      if (t) { t.status = t.creditRemaining >= t.amount - 0.001 ? 'credit' : 'partially_applied'; await t.save(); }
+    }
     emitSchool(io(req), req.companyId, 'payment', { paymentId: payment._id, billId: payment.billId, studentId: payment.studentId, voided: true });
     res.status(200).json({ success: true, data: { payment, bill } });
   } catch (err) { next(err); }
@@ -459,8 +468,10 @@ async function parentView(companyId, student) {
     FeePayment.find({ companyId, studentId: student._id, voided: false }).sort({ paidAt: -1 }).limit(10)
       .select('receiptNumber amount method paidAt').lean(),
   ]);
+  const bankAccount = await require('../models/VirtualAccount').findOne({ companyId, ownerType: 'student', ownerId: student._id }).select('accountNumber accountName bankName -_id').lean();
   return {
     student: { name: [student.lastName, student.firstName, student.otherNames].filter(Boolean).join(' '), admissionNumber: student.admissionNumber, className: student.classId?.name || null },
+    bankAccount,
     bills, payments,
     outstanding: round2(bills.reduce((s, b) => s + Math.max(0, b.balance), 0)),
   };
@@ -645,3 +656,5 @@ exports.sendReminders = async (req, res, next) => {
     res.status(202).json({ success: true, data: { queued: withContact, skippedRecent } });
   } catch (err) { next(err); }
 };
+
+exports._internal = { announcePayment, emailReceipt };

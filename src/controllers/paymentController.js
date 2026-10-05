@@ -394,6 +394,17 @@ exports.webhook = async (req, res) => {
       // First charge for a plan-based transaction, or any one-off charge
       case 'charge.success': {
         const { metadata, amount, reference } = data;
+        // Transfer into a dedicated account (a student's own account number).
+        if (data?.channel === 'dedicated_nuban' || data?.authorization?.channel === 'dedicated_nuban') {
+          try {
+            const { handleDedicatedTransfer } = require('../utils/bankTransfers');
+            const t = await handleDedicatedTransfer(data, { io: req.app.get('io') });
+            console.log(`Dedicated transfer ${reference}: ${t ? t.status : 'not matched'}`);
+          } catch (e) {
+            logger.error(`Dedicated transfer ${reference} failed: ${e.stack || e.message}`);
+          }
+          break;
+        }
         console.log('Payment successful:', reference);
         console.log('Metadata type:', metadata?.type);
         if (metadata?.type === 'storefront_order' && metadata?.companyId) {
