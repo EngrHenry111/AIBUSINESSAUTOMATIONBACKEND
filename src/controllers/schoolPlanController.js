@@ -57,7 +57,7 @@ exports.updatePeriods = async (req, res, next) => {
     if (periods.length < settings.periods.length) {
       await Timetable.updateMany({ companyId: req.companyId }, { $pull: { slots: { period: { $gte: periods.length } } } });
     }
-    await SchoolSettings.updateOne({ _id: settings._id }, { $set: { periods } });
+    await SchoolSettings.updateOne({ _id: settings._id }, { $set: { periods, periodsConfirmed: true } });
     emitSchool(io(req), req.companyId, 'timetable');
     res.status(200).json({ success: true, data: periods });
   } catch (err) { next(err); }

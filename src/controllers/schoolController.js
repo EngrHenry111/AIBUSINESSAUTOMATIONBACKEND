@@ -115,6 +115,36 @@ exports.updateSettings = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── Setup checklist ──────────────────────────────────────────────────────
+// What a new school still has to do, in order, for the overview page.
+async function setupProgress(companyId, settings) {
+  const Timetable = require('../models/Timetable');
+  const FeeStructure = require('../models/FeeStructure');
+  const term = { session: settings.currentSession, term: settings.currentTerm };
+  const [classes, staff, roles, students, timetables, structures] = await Promise.all([
+    SchoolClass.find({ companyId, active: true }).select('subjects subjectTeachers classTeacher').lean(),
+    User.countDocuments({ companyId, role: { $in: ['employee', 'manager'] }, status: { $ne: 'deleted' } }),
+    SchoolStaff.countDocuments({ companyId }),
+    Student.countDocuments({ companyId, status: 'active' }),
+    Timetable.countDocuments({ companyId, ...term, 'slots.0': { $exists: true } }),
+    FeeStructure.countDocuments({ companyId, ...term }),
+  ]);
+  const withSubjects = classes.filter((c) => c.subjects?.length).length;
+  const subjectSlots = classes.reduce((s, c) => s + (c.subjects?.length || 0), 0);
+  const assigned = classes.reduce((s, c) => s + (c.subjectTeachers?.length || 0), 0);
+  const steps = [
+    { key: 'classes', label: 'Create your classes and subjects', done: classes.length > 0 && withSubjects === classes.length, detail: classes.length ? `${classes.length} classes, ${withSubjects} with subjects` : 'No classes yet', to: '/school/classes' },
+    { key: 'staff', label: 'Invite your teachers and bursar to the team', done: staff > 0, detail: staff ? `${staff} team member(s)` : 'Only you so far', to: '/team' },
+    { key: 'roles', label: 'Give each staff member a school role', done: staff > 0 && roles >= staff, detail: staff ? `${roles} of ${staff} have a role` : 'Invite staff first', to: '/school/staff' },
+    { key: 'teachers', label: 'Assign a teacher to each subject', done: subjectSlots > 0 && assigned >= subjectSlots, detail: subjectSlots ? `${assigned} of ${subjectSlots} subjects have a teacher` : 'Add subjects first', to: '/school/classes' },
+    { key: 'students', label: 'Add or import your students', done: students > 0, detail: `${students} active students`, to: '/school/students' },
+    { key: 'bells', label: 'Check the bell times', done: Boolean(settings.periodsConfirmed), detail: `${(settings.periods || []).length} periods a day`, to: '/school/timetable?tab=bells' },
+    { key: 'timetable', label: "Build each class's timetable", done: classes.length > 0 && timetables >= classes.length, detail: `${timetables} of ${classes.length} classes done this term`, to: '/school/timetable' },
+    { key: 'fees', label: "Set this term's fees", done: structures > 0, detail: structures ? `${structures} fee structure(s)` : 'None for this term', to: '/school/fees?tab=structures' },
+  ];
+  return { steps, done: steps.filter((s) => s.done).length, total: steps.length };
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────
 exports.getDashboard = async (req, res, next) => {
   try {
@@ -183,6 +213,7 @@ exports.getDashboard = async (req, res, next) => {
           daily: days,
           recentPayments,
         },
+        setup: await setupProgress(req.companyId, settings),
         attendance: { date: todayStr(), total: attTotal, present: (att.present || 0) + (att.late || 0), absent: att.absent || 0, late: att.late || 0, excused: att.excused || 0 },
       },
     });

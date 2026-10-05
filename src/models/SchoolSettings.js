@@ -54,6 +54,7 @@ const schoolSettingsSchema = new mongoose.Schema({
 
   nextTermBegins: Date, // printed on report cards
 
+  periodsConfirmed: { type: Boolean, default: false }, // saved at least once (setup checklist)
   // Bell times — the rows of every class timetable.
   periods: {
     type: [{ label: String, start: String, end: String, isBreak: Boolean, _id: false }],

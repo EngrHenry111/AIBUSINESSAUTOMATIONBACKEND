@@ -1,6 +1,7 @@
 'use strict';
 
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 
 const createLimiter = (windowMs, max, message) =>
   rateLimit({
@@ -13,10 +14,35 @@ const createLimiter = (windowMs, max, message) =>
     keyGenerator: (req) => req.user?.id || req.ip,
   });
 
-const generalLimiter = createLimiter(
-  15 * 60 * 1000, 200,
-  'Too many requests. Please try again in 15 minutes.'
-);
+// The general limiter runs before authentication, so keying it on req.user
+// never matched: every request was counted per IP, and a whole school or
+// office on one connection shared 200 requests per 15 minutes — a few staff
+// clicking around (plus live-update refreshes) locked everyone out. A valid
+// access token now gets its own, larger budget per user; anything else
+// (logins, public pages, parents) stays per IP.
+function callerKey(req) {
+  if (req.rateLimitKey) return req.rateLimitKey;
+  const header = req.headers.authorization || '';
+  const raw = req.cookies?.accessToken || (header.startsWith('Bearer ') ? header.slice(7) : null);
+  let key = `ip:${req.ip}`;
+  if (raw && process.env.JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(raw, process.env.JWT_SECRET);
+      if (decoded?.id) key = `user:${decoded.id}`;
+    } catch { /* expired or invalid — counted by IP */ }
+  }
+  req.rateLimitKey = key;
+  return key;
+}
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: (req) => (callerKey(req).startsWith('user:') ? 1500 : 300),
+  keyGenerator: callerKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests. Please try again in 15 minutes.' },
+});
 
 const authLimiter = createLimiter(
   15 * 60 * 1000, 10,
