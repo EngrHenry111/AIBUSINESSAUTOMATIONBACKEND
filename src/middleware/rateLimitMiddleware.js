@@ -48,4 +48,13 @@ const widgetMessageLimiter = createLimiter(
   'You’ve sent a lot of messages. Please try again in an hour.'
 );
 
-module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter, widgetMessageLimiter };
+// School parent pages (admission form, fee lookup/payment, portal sign-in).
+// Separate from authLimiter so parents on a school's shared network can't
+// use up staff login attempts — and tight enough to stop admission-number
+// guessing (each attempt also needs the guardian's phone/email).
+const schoolParentLimiter = createLimiter(
+  15 * 60 * 1000, 30,
+  'Too many attempts. Please wait a few minutes and try again.'
+);
+
+module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter, widgetMessageLimiter, schoolParentLimiter };

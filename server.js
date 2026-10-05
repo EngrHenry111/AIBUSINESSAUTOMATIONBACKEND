@@ -79,6 +79,11 @@ async function bootstrap() {
     setInterval(checkMatterReminders, 60 * 60 * 1000);
     logger.info('✅ Matter key-date reminder checker scheduled (runs hourly)');
 
+    // ── School fee reminders to parents (acts at 9am Lagos, checked hourly) ─
+    const { runAutomaticFeeReminders } = require('./src/utils/schoolFeeReminders');
+    setInterval(() => runAutomaticFeeReminders(app.get('io')), 60 * 60 * 1000);
+    logger.info('✅ School fee reminder checker scheduled (daily at 9am, checked hourly)');
+
     // ── Overdue invoice reminders (email + SMS) ────────────────────────────
     const { checkOverdueInvoices } = require('./src/utils/invoiceReminders');
     checkOverdueInvoices();

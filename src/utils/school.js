@@ -208,7 +208,32 @@ async function setBillDiscount(companyId, billId, discount, reason) {
   );
 }
 
+// ── Parent portal session ─────────────────────────────────────────────────
+// A short-lived token naming the children a parent proved access to. Signed
+// with a key derived from JWT_SECRET so it can never pass as a staff token.
+// Errors are 400 + code PORTAL_EXPIRED, never 401: the frontend treats any
+// 401 as "staff session over" and redirects to the staff login page.
+const jwt = require('jsonwebtoken');
+const PARENT_TTL = '2h';
+const parentKey = () => `${process.env.JWT_SECRET}:school-parent`;
+
+function signParentToken(companyId, studentIds) {
+  return jwt.sign({ sp: 1, c: String(companyId), s: studentIds.map(String) }, parentKey(), { expiresIn: PARENT_TTL });
+}
+
+// Returns the student ids the parent may see, for this school only.
+function readParentToken(req, companyId) {
+  const raw = req.headers['x-parent-token'];
+  const expired = () => new AppError('Your session has ended. Please sign in again.', 400, 'PORTAL_EXPIRED');
+  if (!raw) throw expired();
+  let d;
+  try { d = jwt.verify(String(raw), parentKey()); } catch { throw expired(); }
+  if (d?.sp !== 1 || d.c !== String(companyId) || !Array.isArray(d.s)) throw expired();
+  return d.s;
+}
+
 module.exports = {
+  signParentToken, readParentToken,
   TERMS, TERM_LABEL, round2, oid, escapeRe, slugify,
   getSettings, nextNumber, reserveNumbers, formatNumber,
   gradeFor, ordinal, emitSchool, todayStr,

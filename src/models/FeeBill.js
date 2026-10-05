@@ -24,6 +24,8 @@ const feeBillSchema = new mongoose.Schema({
   status: { type: String, enum: ['unpaid', 'partial', 'paid', 'waived', 'cancelled'], default: 'unpaid' },
   dueDate: Date,
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  lastReminderAt: Date,
+  reminderCount: { type: Number, default: 0 },
 }, { timestamps: true });
 
 feeBillSchema.index({ companyId: 1, billNumber: 1 }, { unique: true });

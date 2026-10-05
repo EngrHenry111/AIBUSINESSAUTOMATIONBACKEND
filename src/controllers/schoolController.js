@@ -21,7 +21,7 @@ const {
 const SETTINGS_FIELDS = [
   'schoolName', 'motto', 'address', 'phone', 'email', 'logo', 'currentSession', 'currentTerm',
   'termStart', 'termEnd', 'admissionsOpen', 'admissionNumberPrefix', 'onlinePaymentsEnabled',
-  'minimumOnlinePayment', 'caMax', 'gradingScale',
+  'minimumOnlinePayment', 'caMax', 'gradingScale', 'nextTermBegins', 'reminders',
 ];
 const CLASS_FIELDS = ['name', 'level', 'section', 'classTeacher', 'subjects', 'capacity', 'active'];
 const STUDENT_FIELDS = [
@@ -90,6 +90,15 @@ exports.updateSettings = async (req, res, next) => {
         .map((g) => ({ grade: String(g.grade).trim().slice(0, 5), min: Math.min(100, Math.max(0, Number(g.min) || 0)), remark: String(g.remark || '').slice(0, 60) }));
       if (!body.gradingScale.some((g) => g.min === 0)) return next(new AppError('The grading scale needs a grade starting at 0.', 400));
     }
+    if (body.reminders !== undefined) {
+      const r = body.reminders || {};
+      const days = (v, lo, hi, d) => Math.min(hi, Math.max(lo, Number.isFinite(Number(v)) ? Math.round(Number(v)) : d));
+      body.reminders = {
+        autoEnabled: Boolean(r.autoEnabled), email: r.email !== false, sms: r.sms !== false, whatsapp: Boolean(r.whatsapp),
+        daysBeforeDue: days(r.daysBeforeDue, 0, 60, 3), repeatEveryDays: days(r.repeatEveryDays, 1, 60, 7),
+      };
+    }
+    if (body.nextTermBegins === '') body.nextTermBegins = null;
     if (req.body.slug !== undefined) {
       const slug = slugify(req.body.slug);
       if (slug !== settings.slug && await SchoolSettings.exists({ slug, _id: { $ne: settings._id } })) {

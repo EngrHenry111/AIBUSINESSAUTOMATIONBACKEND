@@ -52,6 +52,29 @@ const schoolSettingsSchema = new mongoose.Schema({
     default: () => DEFAULT_GRADES.map((g) => ({ ...g })),
   },
 
+  nextTermBegins: Date, // printed on report cards
+
+  // Fee reminders to parents of students who owe (utils/schoolFeeReminders.js).
+  reminders: {
+    autoEnabled: { type: Boolean, default: false },
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: true },
+    whatsapp: { type: Boolean, default: false },
+    daysBeforeDue: { type: Number, min: 0, max: 60, default: 3 },
+    repeatEveryDays: { type: Number, min: 1, max: 60, default: 7 },
+  },
+
+  // Results parents can see on the portal — per class and term. Scores
+  // stay staff-only until the school publishes them.
+  publishedResults: [{
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'SchoolClass' },
+    session: String,
+    term: String,
+    publishedAt: Date,
+    publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    _id: false,
+  }],
+
   // Atomic number sequences — $inc'd so two simultaneous admissions or
   // payments can never be issued the same number.
   counters: {

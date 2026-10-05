@@ -13,8 +13,9 @@ const { paystackAPI } = require('../utils/paystack');
 const logger = require('../utils/logger');
 const {
   TERMS, TERM_LABEL, round2, oid, escapeRe, getSettings, nextNumber,
-  emitSchool, billStudents, applyToBill, setBillDiscount,
+  emitSchool, billStudents, applyToBill, setBillDiscount, readParentToken,
 } = require('../utils/school');
+const { sendFeeReminders, collectTargets } = require('../utils/schoolFeeReminders');
 const { findSchoolBySlug, _internal: { emailShell, sendGuardianEmail, escapeHtml } } = require('./schoolController');
 
 const METHODS = ['cash', 'bank_transfer', 'pos', 'cheque', 'online'];
@@ -293,14 +294,14 @@ exports.getDebtors = async (req, res, next) => {
     if (mongoose.isValidObjectId(req.query.classId)) match.classId = oid(req.query.classId);
     const rows = await FeeBill.aggregate([
       { $match: match },
-      { $group: { _id: '$studentId', balance: { $sum: '$balance' }, total: { $sum: '$total' }, paid: { $sum: '$amountPaid' }, bills: { $sum: 1 }, oldestDue: { $min: '$dueDate' } } },
+      { $group: { _id: '$studentId', balance: { $sum: '$balance' }, total: { $sum: '$total' }, paid: { $sum: '$amountPaid' }, bills: { $sum: 1 }, oldestDue: { $min: '$dueDate' }, lastReminded: { $max: '$lastReminderAt' } } },
       { $sort: { balance: -1 } },
       { $limit: 2000 },
       { $lookup: { from: 'students', localField: '_id', foreignField: '_id', as: 'student' } },
       { $unwind: '$student' },
       { $lookup: { from: 'schoolclasses', localField: 'student.classId', foreignField: '_id', as: 'class' } },
       { $project: {
-        balance: 1, total: 1, paid: 1, bills: 1, oldestDue: 1,
+        balance: 1, total: 1, paid: 1, bills: 1, oldestDue: 1, lastReminded: 1,
         student: { _id: '$student._id', firstName: '$student.firstName', lastName: '$student.lastName', admissionNumber: '$student.admissionNumber', status: '$student.status', guardian: '$student.guardian' },
         className: { $first: '$class.name' },
       } },
@@ -480,7 +481,16 @@ exports.publicInitializePayment = async (req, res, next) => {
     if (!settings.onlinePaymentsEnabled || !company?.paymentSettings?.isPaymentSetup || !company.paymentSettings.paystackSubaccountCode) {
       return next(new AppError('Online payment is not available for this school yet. Please pay at the school.', 400));
     }
-    const student = await findStudentForParent(settings.companyId, req.body.admissionNumber, req.body.contact);
+    // Signed-in parent portal (token) or the one-off admission number + contact form.
+    let student;
+    if (req.headers['x-parent-token']) {
+      const allowed = readParentToken(req, settings.companyId);
+      if (!allowed.includes(String(req.body.studentId))) return next(new AppError('Student not found.', 404));
+      student = await Student.findOne({ _id: req.body.studentId, companyId: settings.companyId }).lean();
+      if (!student) return next(new AppError('Student not found.', 404));
+    } else {
+      student = await findStudentForParent(settings.companyId, req.body.admissionNumber, req.body.contact);
+    }
     if (!mongoose.isValidObjectId(req.body.billId)) return next(new AppError('Choose a bill to pay.', 400));
     const bill = await FeeBill.findOne({ _id: req.body.billId, companyId: settings.companyId, studentId: student._id, status: { $in: ['unpaid', 'partial'] } }).lean();
     if (!bill || bill.balance <= 0) return next(new AppError('This bill has nothing left to pay.', 400));
@@ -509,9 +519,9 @@ exports.publicInitializePayment = async (req, res, next) => {
         amount,
         payerEmail: email,
         payerName: String(req.body.payerName || student.guardian?.name || '').slice(0, 200),
-        cancel_action: `${clientUrl()}/schools/${settings.slug}/pay?payment=cancelled`,
+        cancel_action: `${clientUrl()}/schools/${settings.slug}/portal?payment=cancelled`,
       },
-      callback_url: `${clientUrl()}/schools/${settings.slug}/pay`,
+      callback_url: `${clientUrl()}/schools/${settings.slug}/portal`,
     });
     if (!initRes.status) throw new AppError('Could not start the payment. Please try again.', 502);
     res.status(200).json({ success: true, data: { authorizationUrl: initRes.data.authorization_url, reference: initRes.data.reference } });
@@ -600,5 +610,38 @@ exports.publicVerifyPayment = async (req, res, next) => {
         },
       },
     });
+  } catch (err) { next(err); }
+};
+
+exports.findStudentForParent = findStudentForParent;
+exports.parentView = parentView;
+
+// POST /school/fees/reminders { classId?, studentIds?, channels?, dryRun? }
+// Replies at once; messages go out in the background and the result
+// arrives on the socket as a 'reminders' school:update.
+exports.sendReminders = async (req, res, next) => {
+  try {
+    const opts = {
+      classId: mongoose.isValidObjectId(req.body.classId) ? req.body.classId : undefined,
+      studentIds: Array.isArray(req.body.studentIds) ? req.body.studentIds.filter((id) => mongoose.isValidObjectId(id)) : undefined,
+      channels: req.body.channels && typeof req.body.channels === 'object'
+        ? { email: Boolean(req.body.channels.email), sms: Boolean(req.body.channels.sms), whatsapp: Boolean(req.body.channels.whatsapp) }
+        : undefined,
+    };
+    const { targets, skippedRecent } = await collectTargets(req.companyId, opts);
+    const withContact = targets.filter((t) => t.student.guardian?.email || t.student.guardian?.phone).length;
+    if (req.body.dryRun) {
+      let whatsappConnected = false;
+      try { whatsappConnected = require('../services/whatsappService').getStatus(req.companyId)?.status === 'connected'; } catch { /* optional */ }
+      return res.status(200).json({ success: true, data: { students: targets.length, withContact, skippedRecent, whatsappConnected } });
+    }
+    if (opts.channels && !opts.channels.email && !opts.channels.sms && !opts.channels.whatsapp) {
+      return next(new AppError('Choose at least one way to send the reminder.', 400));
+    }
+    const socketIo = io(req);
+    sendFeeReminders(req.companyId, opts)
+      .then((result) => emitSchool(socketIo, req.companyId, 'reminders', { result }))
+      .catch((e) => logger.error(`Fee reminders failed: ${e.message}`));
+    res.status(202).json({ success: true, data: { queued: withContact, skippedRecent } });
   } catch (err) { next(err); }
 };

@@ -7,21 +7,27 @@ const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
 const { enforceTenant } = require('../middleware/tenantMiddleware');
 const { isEmployee, isManager } = require('../middleware/roleMiddleware');
-const { authLimiter, publicStoreLimiter } = require('../middleware/rateLimitMiddleware');
+const { schoolParentLimiter, publicStoreLimiter } = require('../middleware/rateLimitMiddleware');
 const school = require('../controllers/schoolController');
 const fees = require('../controllers/schoolFeeController');
 const academic = require('../controllers/schoolAcademicController');
+const portal = require('../controllers/schoolPortalController');
 
 const router = express.Router();
 
 // ── Public (parents) — no login ──────────────────────────────────────────
 router.get('/public/:slug', publicStoreLimiter, school.getPublicSchool);
-router.post('/public/:slug/apply', authLimiter, school.publicApply);
+router.post('/public/:slug/apply', schoolParentLimiter, school.publicApply);
 // Lookup/pay take an admission number + guardian contact — rate limited
 // tightly so they can't be used to enumerate students.
-router.post('/public/:slug/fees/lookup', authLimiter, fees.publicLookup);
-router.post('/public/:slug/fees/pay', authLimiter, fees.publicInitializePayment);
+router.post('/public/:slug/fees/lookup', schoolParentLimiter, fees.publicLookup);
+router.post('/public/:slug/fees/pay', schoolParentLimiter, fees.publicInitializePayment);
 router.get('/public/:slug/fees/verify/:reference', publicStoreLimiter, fees.publicVerifyPayment);
+// Parent portal: sign in once, then a short-lived x-parent-token header.
+router.post('/public/:slug/portal/login', schoolParentLimiter, portal.login);
+router.get('/public/:slug/portal/children', publicStoreLimiter, portal.getChildren);
+router.get('/public/:slug/portal/children/:studentId', publicStoreLimiter, portal.getChild);
+router.get('/public/:slug/portal/children/:studentId/report-card', publicStoreLimiter, portal.getReportCard);
 
 // ── Staff ────────────────────────────────────────────────────────────────
 router.use(protect, enforceTenant, isEmployee);
@@ -65,6 +71,7 @@ router.post('/fees/bills/:id/cancel', isManager, fees.cancelBill);
 router.post('/fees/bills/:id/recalculate', isManager, fees.recalculateBill);
 router.get('/fees/debtors', fees.getDebtors);
 router.get('/fees/summary', fees.getFeeSummary);
+router.post('/fees/reminders', fees.sendReminders);
 
 router.get('/fees/payments', fees.getPayments);
 router.post('/fees/payments', fees.recordPayment);
@@ -79,5 +86,8 @@ router.get('/results/sheet', academic.getScoreSheet);
 router.post('/results/sheet', academic.saveScoreSheet);
 router.get('/results/broadsheet', academic.getBroadsheet);
 router.get('/results/report-card/:studentId', academic.getReportCard);
+router.put('/results/report-card/:studentId/comments', academic.saveComments);
+router.get('/results/publications', academic.getPublications);
+router.post('/results/publish', isManager, academic.publishResults);
 
 module.exports = router;
