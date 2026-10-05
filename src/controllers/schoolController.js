@@ -12,6 +12,8 @@ const User = require('../models/User');
 const emailService = require('../services/emailService');
 const { AppError } = require('../middleware/errorMiddleware');
 const { pick } = require('../utils/pick');
+const SchoolStaff = require('../models/SchoolStaff');
+const { isTeacher, assertClassAccess, classFilterFor } = require('../utils/schoolAccess');
 const logger = require('../utils/logger');
 const {
   TERMS, oid, escapeRe, slugify, getSettings, nextNumber, reserveNumbers, formatNumber,
@@ -23,7 +25,7 @@ const SETTINGS_FIELDS = [
   'termStart', 'termEnd', 'admissionsOpen', 'admissionNumberPrefix', 'onlinePaymentsEnabled',
   'minimumOnlinePayment', 'caMax', 'gradingScale', 'nextTermBegins', 'reminders',
 ];
-const CLASS_FIELDS = ['name', 'level', 'section', 'classTeacher', 'subjects', 'capacity', 'active'];
+const CLASS_FIELDS = ['name', 'level', 'section', 'classTeacher', 'subjects', 'subjectTeachers', 'capacity', 'active'];
 const STUDENT_FIELDS = [
   'firstName', 'lastName', 'otherNames', 'gender', 'dateOfBirth', 'classId', 'status', 'guardian',
   'address', 'stateOfOrigin', 'religion', 'bloodGroup', 'medicalNotes', 'previousSchool', 'photo', 'admittedAt',
@@ -198,13 +200,23 @@ async function cleanClassBody(req) {
     body.classTeacher = body.classTeacher && mongoose.isValidObjectId(body.classTeacher)
       && await User.exists({ _id: body.classTeacher, companyId: req.companyId }) ? body.classTeacher : null;
   }
+  if (body.subjectTeachers !== undefined) {
+    const rows = (Array.isArray(body.subjectTeachers) ? body.subjectTeachers : [])
+      .filter((r) => r && String(r.subject || '').trim() && mongoose.isValidObjectId(r.teacher));
+    const valid = new Set((await User.find({ _id: { $in: rows.map((r) => r.teacher) }, companyId: req.companyId }).select('_id').lean()).map((u) => String(u._id)));
+    const seen = new Set();
+    body.subjectTeachers = rows
+      .map((r) => ({ subject: String(r.subject).trim().slice(0, 100), teacher: r.teacher }))
+      .filter((r) => valid.has(String(r.teacher)) && !seen.has(r.subject) && seen.add(r.subject));
+  }
   return body;
 }
 
 exports.getClasses = async (req, res, next) => {
   try {
     const [classes, counts] = await Promise.all([
-      SchoolClass.find({ companyId: req.companyId }).sort({ level: 1, name: 1 }).populate('classTeacher', 'name email').lean(),
+      SchoolClass.find({ companyId: req.companyId, ...(isTeacher(req) && { _id: classFilterFor(req) }) })
+        .sort({ level: 1, name: 1 }).populate('classTeacher', 'name email').populate('subjectTeachers.teacher', 'name').lean(),
       Student.aggregate([{ $match: { companyId: oid(req.companyId), status: 'active' } }, { $group: { _id: '$classId', count: { $sum: 1 } } }]),
     ]);
     const map = new Map(counts.map((c) => [String(c._id), c.count]));
@@ -259,8 +271,11 @@ exports.getStudents = async (req, res, next) => {
     if (req.query.status) filter.status = req.query.status;
     else filter.status = 'active';
     if (req.query.status === 'all') delete filter.status;
-    if (req.query.classId === 'none') filter.classId = null;
-    else if (mongoose.isValidObjectId(req.query.classId)) filter.classId = req.query.classId;
+    if (req.query.classId === 'none' && !isTeacher(req)) filter.classId = null;
+    else {
+      const cf = classFilterFor(req, mongoose.isValidObjectId(req.query.classId) ? req.query.classId : undefined);
+      if (cf) filter.classId = cf;
+    }
     if (req.query.search) {
       const re = new RegExp(escapeRe(String(req.query.search).trim()), 'i');
       filter.$or = [{ firstName: re }, { lastName: re }, { otherNames: re }, { admissionNumber: re }, { 'guardian.name': re }, { 'guardian.phone': re }];
@@ -277,7 +292,7 @@ exports.getStudents = async (req, res, next) => {
     const owingMap = new Map(owing.map((o) => [String(o._id), o.balance]));
     res.status(200).json({
       success: true,
-      data: students.map((s) => ({ ...s, fullName: [s.lastName, s.firstName, s.otherNames].filter(Boolean).join(' '), balance: owingMap.get(String(s._id)) || 0 })),
+      data: students.map((s) => ({ ...s, fullName: [s.lastName, s.firstName, s.otherNames].filter(Boolean).join(' '), ...(!isTeacher(req) && { balance: owingMap.get(String(s._id)) || 0 }) })),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     });
   } catch (err) { next(err); }
@@ -347,11 +362,13 @@ exports.bulkCreateStudents = async (req, res, next) => {
 exports.getStudent = async (req, res, next) => {
   try {
     const student = await findOwned(Student, req, req.params.id, 'Student');
+    assertClassAccess(req, student.classId);
     await student.populate('classId', 'name subjects level');
     const settings = await getSettings(req.companyId);
+    const teacher = isTeacher(req); // teachers don't see fees
     const [bills, payments, attendance, application] = await Promise.all([
-      FeeBill.find({ companyId: req.companyId, studentId: student._id }).sort({ createdAt: -1 }).lean(),
-      FeePayment.find({ companyId: req.companyId, studentId: student._id }).sort({ paidAt: -1 }).limit(100).populate('recordedBy', 'name').lean(),
+      teacher ? [] : FeeBill.find({ companyId: req.companyId, studentId: student._id }).sort({ createdAt: -1 }).lean(),
+      teacher ? [] : FeePayment.find({ companyId: req.companyId, studentId: student._id }).sort({ paidAt: -1 }).limit(100).populate('recordedBy', 'name').lean(),
       AttendanceRecord.aggregate([
         { $match: { companyId: oid(req.companyId), session: settings.currentSession, term: settings.currentTerm, 'records.studentId': student._id } },
         { $unwind: '$records' },
@@ -364,7 +381,7 @@ exports.getStudent = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: {
-        student, bills, payments, application, outstanding,
+        student, bills, payments, application, outstanding, feesHidden: teacher,
         attendance: Object.fromEntries(attendance.map((a) => [a._id, a.count])),
         settings: { currentSession: settings.currentSession, currentTerm: settings.currentTerm },
       },
@@ -430,6 +447,74 @@ exports.promoteStudents = async (req, res, next) => {
     const result = await Student.updateMany(filter, { $set: update });
     emitSchool(io(req), req.companyId, 'students');
     res.status(200).json({ success: true, data: { moved: result.modifiedCount } });
+  } catch (err) { next(err); }
+};
+
+// ── Me & staff roles ─────────────────────────────────────────────────────
+// GET /school/me — the signed-in user's school role and the classes and
+// subjects they teach (drives the menu and teacher home screen).
+exports.getMe = async (req, res, next) => {
+  try {
+    const me = String(req.user._id);
+    const classes = await SchoolClass.find({ companyId: req.companyId, $or: [{ classTeacher: req.user._id }, { 'subjectTeachers.teacher': req.user._id }] })
+      .sort({ level: 1, name: 1 }).select('name classTeacher subjectTeachers subjects').lean();
+    res.status(200).json({
+      success: true,
+      data: {
+        role: req.school.role,
+        manager: req.school.manager,
+        teaching: classes.map((c) => ({
+          _id: c._id, name: c.name,
+          classTeacher: String(c.classTeacher) === me,
+          subjects: String(c.classTeacher) === me ? c.subjects : (c.subjectTeachers || []).filter((st) => String(st.teacher) === me).map((st) => st.subject),
+        })),
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// GET /school/staff — team members with their school role and assignments.
+exports.getStaff = async (req, res, next) => {
+  try {
+    const [users, roles, classes] = await Promise.all([
+      User.find({ companyId: req.companyId, status: { $ne: 'deleted' }, role: { $ne: 'customer' } }).select('name email role status').sort({ name: 1 }).lean(),
+      SchoolStaff.find({ companyId: req.companyId }).lean(),
+      SchoolClass.find({ companyId: req.companyId }).select('name classTeacher subjectTeachers').lean(),
+    ]);
+    const roleOf = new Map(roles.map((r) => [String(r.userId), r.role]));
+    res.status(200).json({
+      success: true,
+      data: users.map((u) => {
+        const id = String(u._id);
+        const fullAccess = ['manager', 'company_owner', 'super_admin'].includes(u.role);
+        return {
+          _id: u._id, name: u.name, email: u.email, accountRole: u.role, status: u.status,
+          schoolRole: fullAccess ? 'owner' : (roleOf.get(id) || null),
+          classTeacherOf: classes.filter((c) => String(c.classTeacher) === id).map((c) => c.name),
+          teaches: classes.flatMap((c) => (c.subjectTeachers || []).filter((st) => String(st.teacher) === id).map((st) => `${st.subject} (${c.name})`)),
+        };
+      }),
+    });
+  } catch (err) { next(err); }
+};
+
+// PUT /school/staff/:userId { role: admin|bursar|teacher|null }
+exports.setStaffRole = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    if (!mongoose.isValidObjectId(userId)) return next(new AppError('Team member not found.', 404));
+    const user = await User.findOne({ _id: userId, companyId: req.companyId }).select('role').lean();
+    if (!user) return next(new AppError('Team member not found.', 404));
+    if (['manager', 'company_owner', 'super_admin'].includes(user.role)) return next(new AppError('Owners and managers always have full access.', 400));
+    const { role } = req.body;
+    if (role == null || role === '') {
+      await SchoolStaff.deleteOne({ companyId: req.companyId, userId });
+    } else {
+      if (!['admin', 'bursar', 'teacher'].includes(role)) return next(new AppError('Role must be admin, bursar or teacher.', 400));
+      await SchoolStaff.findOneAndUpdate({ companyId: req.companyId, userId }, { $set: { role } }, { upsert: true });
+    }
+    emitSchool(io(req), req.companyId, 'staff', { userId });
+    res.status(200).json({ success: true, data: { userId, role: role || null } });
   } catch (err) { next(err); }
 };
 

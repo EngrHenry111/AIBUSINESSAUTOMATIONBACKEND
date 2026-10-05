@@ -135,3 +135,14 @@ exports.getReportCard = async (req, res, next) => {
     res.status(200).json({ success: true, data: card });
   } catch (err) { next(err); }
 };
+
+// GET /school/public/:slug/portal/children/:studentId/schedule — the
+// child's class timetable this term and upcoming exams.
+exports.getSchedule = async (req, res, next) => {
+  try {
+    const settings = await findSchoolBySlug(req.params.slug);
+    const student = await allowedStudent(req, settings);
+    const { scheduleForClass } = require('./schoolPlanController');
+    res.status(200).json({ success: true, data: await scheduleForClass(settings.companyId, student.classId?._id, settings) });
+  } catch (err) { next(err); }
+};

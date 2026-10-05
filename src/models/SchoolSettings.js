@@ -54,6 +54,18 @@ const schoolSettingsSchema = new mongoose.Schema({
 
   nextTermBegins: Date, // printed on report cards
 
+  // Bell times — the rows of every class timetable.
+  periods: {
+    type: [{ label: String, start: String, end: String, isBreak: Boolean, _id: false }],
+    default: () => [
+      { label: '1', start: '08:00', end: '08:40' }, { label: '2', start: '08:40', end: '09:20' },
+      { label: '3', start: '09:20', end: '10:00' }, { label: 'Break', start: '10:00', end: '10:30', isBreak: true },
+      { label: '4', start: '10:30', end: '11:10' }, { label: '5', start: '11:10', end: '11:50' },
+      { label: '6', start: '11:50', end: '12:30' }, { label: 'Lunch', start: '12:30', end: '13:00', isBreak: true },
+      { label: '7', start: '13:00', end: '13:40' }, { label: '8', start: '13:40', end: '14:20' },
+    ],
+  },
+
   // Fee reminders to parents of students who owe (utils/schoolFeeReminders.js).
   reminders: {
     autoEnabled: { type: Boolean, default: false },

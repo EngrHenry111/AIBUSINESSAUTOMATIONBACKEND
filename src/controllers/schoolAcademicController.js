@@ -10,6 +10,7 @@ const SchoolSettings = require('../models/SchoolSettings');
 const emailService = require('../services/emailService');
 const { sendSMS } = require('../services/smsService');
 const logger = require('../utils/logger');
+const { isTeacher, assertClassAccess, assertSubjectAccess } = require('../utils/schoolAccess');
 const { AppError } = require('../middleware/errorMiddleware');
 const { pick } = require('../utils/pick');
 const {
@@ -45,6 +46,7 @@ async function periodFrom(req, source = req.query) {
 exports.getRegister = async (req, res, next) => {
   try {
     const cls = await findClass(req, req.query.classId);
+    assertClassAccess(req, cls._id);
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayStr();
     const [students, record] = await Promise.all([
       classStudents(req.companyId, cls._id),
@@ -65,6 +67,7 @@ exports.getRegister = async (req, res, next) => {
 exports.saveRegister = async (req, res, next) => {
   try {
     const cls = await findClass(req, req.body.classId);
+    assertClassAccess(req, cls._id);
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.date || '') ? req.body.date : todayStr();
     if (date > todayStr()) return next(new AppError('You can\'t take attendance for a future date.', 400));
     const valid = new Set((await Student.find({ companyId: req.companyId, classId: cls._id }).select('_id').lean()).map((s) => String(s._id)));
@@ -87,6 +90,7 @@ exports.saveRegister = async (req, res, next) => {
 exports.getAttendanceReport = async (req, res, next) => {
   try {
     const cls = await findClass(req, req.query.classId);
+    assertClassAccess(req, cls._id);
     const match = { companyId: oid(req.companyId), classId: cls._id };
     if (req.query.from || req.query.to) {
       match.date = {};
@@ -132,6 +136,7 @@ exports.getScoreSheet = async (req, res, next) => {
     const { settings, session, term } = await periodFrom(req);
     const subject = String(req.query.subject || '').trim();
     if (!subject) return next(new AppError('Choose a subject.', 400));
+    assertSubjectAccess(req, cls._id, subject);
     const [students, scores] = await Promise.all([
       classStudents(req.companyId, cls._id),
       ResultScore.find({ companyId: req.companyId, classId: cls._id, session, term, subject }).lean(),
@@ -158,6 +163,7 @@ exports.saveScoreSheet = async (req, res, next) => {
     const { settings, session, term } = await periodFrom(req, req.body);
     const subject = String(req.body.subject || '').trim().slice(0, 100);
     if (!subject) return next(new AppError('Choose a subject.', 400));
+    assertSubjectAccess(req, cls._id, subject);
     const caMax = settings.caMax;
     const examMax = 100 - caMax;
     const valid = new Set((await Student.find({ companyId: req.companyId, classId: cls._id }).select('_id').lean()).map((s) => String(s._id)));
@@ -220,6 +226,7 @@ async function classRanking(companyId, classId, session, term) {
 exports.getBroadsheet = async (req, res, next) => {
   try {
     const cls = await findClass(req, req.query.classId);
+    assertClassAccess(req, cls._id);
     const { session, term } = await periodFrom(req);
     const [students, { ranked }] = await Promise.all([
       classStudents(req.companyId, cls._id),
@@ -298,7 +305,9 @@ exports.isPublished = isPublished;
 exports.getReportCard = async (req, res, next) => {
   try {
     const { settings, session, term } = await periodFrom(req);
-    res.status(200).json({ success: true, data: await buildReportCard(req.companyId, req.params.studentId, session, term, settings) });
+    const card = await buildReportCard(req.companyId, req.params.studentId, session, term, settings);
+    assertClassAccess(req, card.class._id);
+    res.status(200).json({ success: true, data: card });
   } catch (err) { next(err); }
 };
 
@@ -310,6 +319,14 @@ exports.saveComments = async (req, res, next) => {
     }
     const { session, term } = await periodFrom(req, req.body);
     const set = { updatedBy: req.user._id };
+    if (isTeacher(req)) {
+      // Only the class teacher (of the class the exams were sat in), and
+      // only the teacher's comment — the principal's is the school's.
+      const score = await ResultScore.findOne({ companyId: req.companyId, studentId: req.params.studentId, session, term }).select('classId').lean();
+      const classId = score?.classId || (await Student.findById(req.params.studentId).select('classId').lean())?.classId;
+      if (!classId || !req.school.classTeacherOf.has(String(classId))) return next(new AppError('Only the class teacher can comment on this report card.', 403));
+      if (req.body.principalComment !== undefined) return next(new AppError("Only the school's management can write the principal's comment.", 403));
+    }
     if (req.body.teacherComment !== undefined) set.teacherComment = String(req.body.teacherComment).slice(0, 1000);
     if (req.body.principalComment !== undefined) set.principalComment = String(req.body.principalComment).slice(0, 1000);
     const remark = await ReportCardRemark.findOneAndUpdate(

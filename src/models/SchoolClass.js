@@ -11,11 +11,19 @@ const schoolClassSchema = new mongoose.Schema({
   section: { type: String, trim: true, maxlength: 60 }, // Nursery, Primary, Junior Secondary…
   classTeacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   subjects: [{ type: String, trim: true, maxlength: 100 }],
+  // Who teaches which subject in this class — scopes teachers' score entry.
+  subjectTeachers: [{
+    subject: { type: String, trim: true, maxlength: 100 },
+    teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    _id: false,
+  }],
   capacity: { type: Number, min: 0 },
   active: { type: Boolean, default: true },
 }, { timestamps: true });
 
 schoolClassSchema.index({ companyId: 1, name: 1 }, { unique: true });
 schoolClassSchema.index({ companyId: 1, level: 1 });
+schoolClassSchema.index({ companyId: 1, classTeacher: 1 });
+schoolClassSchema.index({ companyId: 1, 'subjectTeachers.teacher': 1 });
 
 module.exports = mongoose.model('SchoolClass', schoolClassSchema);
