@@ -411,6 +411,14 @@ exports.webhook = async (req, res) => {
             console.log(`Storefront webhook fulfilment FAILED for ${reference}: ${e.message}`);
             logger.error(`Storefront webhook fulfilment failed for ${reference}: ${e.stack || e.message}`);
           }
+        } else if (metadata?.type === 'school_fee' && metadata?.companyId) {
+          try {
+            const { fulfilSchoolFeePayment } = require('./schoolFeeController');
+            const { payment } = await fulfilSchoolFeePayment(data, { io: req.app.get('io') });
+            console.log(`School fee credited: ${payment?.receiptNumber} (${reference})`);
+          } catch (e) {
+            logger.error(`School fee webhook credit failed for ${reference}: ${e.stack || e.message}`);
+          }
         } else if (metadata?.companyId && metadata?.plan) {
           await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100);
         }
