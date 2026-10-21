@@ -19,6 +19,7 @@ router.get('/ledger', ctrl.ledger);
 router.get('/branches', ctrl.listBranches);
 router.post('/branches', ctrl.createBranch);
 router.put('/branches/:id', ctrl.updateBranch);
+router.get('/branches/:id/last-meters', ctrl.lastMeters);
 router.delete('/branches/:id', ctrl.deleteBranch);
 
 router.get('/reports', ctrl.listReports);

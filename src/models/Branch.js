@@ -12,6 +12,23 @@ const departmentSchema = new mongoose.Schema({
   headId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 });
 
+const nozzleSchema = new mongoose.Schema({
+  code: { type: String, required: true, trim: true, maxlength: 20 },  // "P1-N1"
+  pump: { type: String, required: true, trim: true, maxlength: 40 },  // "Pump 1"
+  product: { type: String, enum: ['PMS', 'AGO', 'DPK', 'LPG'], default: 'PMS' },
+}, { _id: false });
+
+const shiftSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 40 },
+  start: { type: String, required: true, trim: true, maxlength: 5 },
+  end: { type: String, required: true, trim: true, maxlength: 5 },
+}, { _id: false });
+
+const DEFAULT_SHIFTS = [
+  { name: 'Morning', start: '06:00', end: '14:00' },
+  { name: 'Afternoon', start: '14:00', end: '22:00' },
+];
+
 const branchSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
@@ -34,6 +51,9 @@ const branchSchema = new mongoose.Schema({
     AGO: { type: Number, default: 0 },
     DPK: { type: Number, default: 0 },
   },
+  // Forecourt layout — filling stations only.
+  nozzles: { type: [nozzleSchema], default: [] },
+  shifts: { type: [shiftSchema], default: () => DEFAULT_SHIFTS.map((x) => ({ ...x })) },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   demo: { type: Boolean, default: false }, // created by the demo loader — removable in one click
 }, { timestamps: true });
@@ -48,3 +68,4 @@ const DEFAULT_BRANCH_DEPARTMENTS = {
 
 module.exports = mongoose.model('Branch', branchSchema);
 module.exports.DEFAULT_BRANCH_DEPARTMENTS = DEFAULT_BRANCH_DEPARTMENTS;
+module.exports.DEFAULT_SHIFTS = DEFAULT_SHIFTS;

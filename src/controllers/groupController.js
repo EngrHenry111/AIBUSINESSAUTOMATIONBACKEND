@@ -4,12 +4,12 @@ const mongoose = require('mongoose');
 const Branch = require('../models/Branch');
 const BranchReport = require('../models/BranchReport');
 const User = require('../models/User');
-const { DEFAULT_BRANCH_DEPARTMENTS } = require('../models/Branch');
+const { DEFAULT_BRANCH_DEPARTMENTS, DEFAULT_SHIFTS } = require('../models/Branch');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { complete, MODELS } = require('../services/groqService');
 const logger = require('../utils/logger');
-const { alertIfShort, SHORTAGE_ALERT } = require('../utils/groupAlerts');
+const { alertIfShort, SHORTAGE_ALERT, METER_GAP_ALERT } = require('../utils/groupAlerts');
 
 // ── Multi-branch group operations ──────────────────────────────────────
 // Owner (company_owner / super_admin) = group level: sees every branch and
@@ -57,6 +57,14 @@ async function loadReport(req, id) {
 
 const pickReportFields = (body) => ({
   department: body.department,
+  shift: body.shift && body.shift.name ? {
+    name: String(body.shift.name).slice(0, 40),
+    start: String(body.shift.start || '').slice(0, 5),
+    end: String(body.shift.end || '').slice(0, 5),
+  } : undefined,
+  attendantName: body.attendantName !== undefined ? String(body.attendantName || '').trim().slice(0, 120) : undefined,
+  attendantId: body.attendantId !== undefined ? (mongoose.isValidObjectId(body.attendantId) ? body.attendantId : null) : undefined,
+  transfers: Array.isArray(body.transfers) ? body.transfers : undefined,
   reportDate: body.reportDate ? dayStart(String(body.reportDate).slice(0, 10)) : undefined,
   pumps: Array.isArray(body.pumps) ? body.pumps : undefined,
   items: Array.isArray(body.items) ? body.items : undefined,
@@ -64,6 +72,39 @@ const pickReportFields = (body) => ({
   expenses: Array.isArray(body.expenses) ? body.expenses : undefined,
   notes: body.notes,
 });
+
+// Latest closing meter per nozzle from shifts BEFORE (date, shiftStart).
+// Night shifts are dated by the day they start, so "06:00 tomorrow" comes
+// after "22:00 today" through the date, and shifts on the same day order by
+// start time.
+async function previousClosings(branchId, date, shiftStart, excludeId, codes) {
+  const out = {};
+  const base = {
+    branchId,
+    status: { $nin: ['draft', 'rejected'] },
+    $or: [{ reportDate: { $lt: date } }, { reportDate: date, 'shift.start': { $lt: shiftStart || '99:99' } }],
+  };
+  if (excludeId && mongoose.isValidObjectId(excludeId)) base._id = { $ne: excludeId };
+  await Promise.all(codes.map(async (code) => {
+    const prev = await BranchReport.findOne({ ...base, 'pumps.nozzle': code })
+      .sort({ reportDate: -1, 'shift.start': -1, createdAt: -1 })
+      .select('pumps.nozzle pumps.closingMeter attendantName shift reportDate').lean();
+    const line = prev?.pumps.find((p) => p.nozzle === code);
+    if (line) out[code] = { closing: line.closingMeter, attendant: prev.attendantName, shift: prev.shift?.name, date: ymd(prev.reportDate) };
+  }));
+  return out;
+}
+
+async function stampMeterGaps(report) {
+  const codes = [...new Set(report.pumps.map((p) => p.nozzle).filter(Boolean))];
+  if (!codes.length) return;
+  const prev = await previousClosings(report.branchId, report.reportDate, report.shift?.start, report._id, codes);
+  report.pumps.forEach((p) => {
+    const last = prev[p.nozzle];
+    p.prevClosing = last ? last.closing : null;
+    p.meterGap = last ? Math.round((p.openingMeter - last.closing) * 100) / 100 : 0;
+  });
+}
 
 function submitReport(report, branch, user) {
   report.submittedAt = new Date();
@@ -116,6 +157,18 @@ exports.members = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// GET /group/branches/:id/last-meters?date=YYYY-MM-DD&shiftStart=HH:mm
+// Prefills each nozzle's opening meter with the previous shift's closing.
+exports.lastMeters = async (req, res, next) => {
+  try {
+    const branch = await loadBranch(req, req.params.id);
+    const date = dayStart(String(req.query.date || todayYmd()).slice(0, 10));
+    const codes = branch.nozzles.map((n) => n.code);
+    const data = await previousClosings(branch._id, date, req.query.shiftStart, req.query.excludeId, codes);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+};
+
 function branchPayload(body) {
   const out = {};
   ['name', 'code', 'businessLine', 'address', 'city', 'state', 'dailySalesTarget', 'fuelPrices', 'status'].forEach((k) => {
@@ -123,6 +176,16 @@ function branchPayload(body) {
   });
   if (body.managerId !== undefined) out.managerId = body.managerId || null;
   if (Array.isArray(body.staff)) out.staff = body.staff.filter(Boolean);
+  if (Array.isArray(body.nozzles)) {
+    out.nozzles = body.nozzles
+      .filter((n) => n && String(n.code || '').trim())
+      .map((n) => ({ code: String(n.code).trim().toUpperCase(), pump: String(n.pump || n.code).trim(), product: n.product || 'PMS' }));
+  }
+  if (Array.isArray(body.shifts)) {
+    out.shifts = body.shifts
+      .filter((x) => x && String(x.name || '').trim() && /^\d{2}:\d{2}$/.test(x.start || '') && /^\d{2}:\d{2}$/.test(x.end || ''))
+      .map((x) => ({ name: String(x.name).trim(), start: x.start, end: x.end }));
+  }
   if (Array.isArray(body.departments)) {
     out.departments = body.departments
       .filter((d) => d && String(d.name || '').trim())
@@ -139,6 +202,8 @@ exports.createBranch = async (req, res, next) => {
     if (!data.departments?.length) {
       data.departments = (DEFAULT_BRANCH_DEPARTMENTS[data.businessLine] || DEFAULT_BRANCH_DEPARTMENTS.general).map((name) => ({ name }));
     }
+    if (data.businessLine !== 'filling_station') data.nozzles = [];
+    if (!data.shifts?.length) data.shifts = DEFAULT_SHIFTS.map((x) => ({ ...x }));
     const branch = await Branch.create({ ...data, companyId: req.companyId });
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'group.branch_create', description: branch.name, ip: req.ip });
     res.status(201).json({ success: true, data: branch });
@@ -241,12 +306,13 @@ exports.createReport = async (req, res, next) => {
       branchId: branch._id,
       branchName: branch.name,
       businessLine: branch.businessLine,
-      referenceNumber: `DSR/${branch.code || 'BR'}/${dateKey}/${seq}`,
+      referenceNumber: `DSR/${branch.code || 'BR'}/${dateKey}/${fields.shift?.name ? fields.shift.name.charAt(0).toUpperCase() : ''}${seq}`,
       preparedBy: req.user._id,
       preparedByName: req.user.name,
       trail: [{ action: 'created', byName: req.user.name }],
     });
     if (req.body.submit) submitReport(report, branch, req.user);
+    await stampMeterGaps(report);
     await report.save();
     if (req.body.submit) alertIfShort(report, branch);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'group.report_create', description: `${report.referenceNumber} · ${branch.name}`, ip: req.ip });
@@ -267,6 +333,7 @@ exports.updateReport = async (req, res, next) => {
     report.trail.push({ action: 'edited', byName: req.user.name });
     if (req.body.submit) submitReport(report, branch, req.user);
     else if (report.status === 'rejected') report.status = 'draft';
+    await stampMeterGaps(report);
     await report.save();
     if (req.body.submit) alertIfShort(report, branch);
     res.json({ success: true, data: report });
@@ -278,6 +345,7 @@ exports.submit = async (req, res, next) => {
     const { report, branch } = await loadReport(req, req.params.id);
     if (!['draft', 'rejected'].includes(report.status)) return next(new AppError('Report is already submitted.', 400));
     submitReport(report, branch, req.user);
+    await stampMeterGaps(report);
     await report.save();
     alertIfShort(report, branch);
     res.json({ success: true, data: report });
@@ -372,7 +440,7 @@ async function buildOverview(req) {
     branchId: { $in: branchIds },
     status: { $ne: 'draft' },
     reportDate: { $gte: dayStart(from), $lte: dayStart(to) },
-  }).select('branchId branchName businessLine department status reportDate totals referenceNumber').lean();
+  }).select('branchId branchName businessLine department status reportDate totals referenceNumber attendantName shift').lean();
 
   const live = reports.filter((r) => r.status !== 'rejected');
   const sum = (arr, f) => arr.reduce((s, r) => s + (f(r) || 0), 0);
@@ -424,7 +492,7 @@ async function buildOverview(req) {
     .forEach((r) => alerts.push({
       type: 'shortage', severity: r.totals.variance <= -SHORTAGE_ALERT * 4 ? 'high' : 'medium',
       reportId: r._id, branch: r.branchName, department: r.department, date: ymd(r.reportDate), amount: r.totals.variance,
-      message: `${r.branchName} · ${r.department} is short ₦${Math.abs(r.totals.variance).toLocaleString()} on ${ymd(r.reportDate)}`,
+      message: `${r.branchName} · ${r.attendantName ? `${r.attendantName} (${r.shift?.name || ""} shift)` : r.department} is short ₦${Math.abs(Math.round(r.totals.variance)).toLocaleString()} on ${ymd(r.reportDate)}`,
     }));
   perBranch.filter((b) => b.missingToday.length).forEach((b) => alerts.push({
     type: 'missing', severity: b.departmentsReportedToday === 0 ? 'high' : 'low', branch: b.name,
@@ -441,6 +509,30 @@ async function buildOverview(req) {
     message: `${b.name} is at ${b.achievement}% of its sales target for this period`,
   }));
 
+  // Attendant watch: who handles the money on each shift, and how often they come up short.
+  const att = {};
+  live.filter((r) => r.attendantName).forEach((r) => {
+    const key = `${r.attendantName}|${r.branchName}`;
+    att[key] = att[key] || { name: r.attendantName, branch: r.branchName, shifts: 0, sales: 0, variance: 0, shortShifts: 0, meterGapLitres: 0 };
+    const a = att[key];
+    a.shifts += 1;
+    a.sales += r.totals.expectedSales;
+    a.variance += r.totals.variance;
+    a.meterGapLitres += r.totals.meterGapLitres || 0;
+    if (r.totals.variance <= -5000) a.shortShifts += 1;
+  });
+  const attendants = Object.values(att).sort((a, b) => a.variance - b.variance);
+  attendants.filter((a) => a.shortShifts >= 3).slice(0, 5).forEach((a) => alerts.push({
+    type: 'attendant', severity: a.variance <= -SHORTAGE_ALERT * 4 ? 'high' : 'medium', branch: a.branch,
+    message: `${a.name} (${a.branch}) was short on ${a.shortShifts} of ${a.shifts} shifts, ₦${Math.abs(Math.round(a.variance)).toLocaleString()} in total`,
+  }));
+  live.filter((r) => (r.totals.meterGapLitres || 0) >= METER_GAP_ALERT).slice(0, 6).forEach((r) => alerts.push({
+    type: 'meter', severity: 'high', reportId: r._id, branch: r.branchName, date: ymd(r.reportDate),
+    message: `Meter handover gap of ${Math.round(r.totals.meterGapLitres).toLocaleString()} L at ${r.branchName}${r.shift?.name ? `, ${r.shift.name} shift` : ''} on ${ymd(r.reportDate)}${r.attendantName ? ` (${r.attendantName})` : ''}: opening didn't match the last closing`,
+  }));
+  const sevRank = { high: 0, medium: 1, low: 2 };
+  alerts.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
+
   const todayLive = live.filter((r) => ymd(r.reportDate) === to);
   return {
     period: { from, to, days },
@@ -451,6 +543,7 @@ async function buildOverview(req) {
       expenses: sum(live, (r) => r.totals.expenses),
       variance: sum(live, (r) => r.totals.variance),
       shortages: sum(live.filter((r) => r.totals.variance < 0), (r) => r.totals.variance),
+      meterGapLitres: sum(live, (r) => r.totals.meterGapLitres),
       litres: sum(live, (r) => r.totals.litres),
       pendingApprovals: live.filter((r) => r.status.startsWith('pending')).length,
       todaySales: sum(todayLive, (r) => r.totals.expectedSales),
@@ -461,6 +554,7 @@ async function buildOverview(req) {
     byLine,
     trend,
     alerts,
+    attendants: attendants.slice(0, 15),
   };
 }
 
@@ -482,6 +576,7 @@ exports.aiBrief = async (req, res, next) => {
         pending: b.pending, litres: b.litres, missingToday: b.missingToday,
       })),
       alerts: o.alerts.map((a) => a.message),
+      attendants: o.attendants.slice(0, 8).map((a) => ({ name: a.name, branch: a.branch, shifts: a.shifts, variance: a.variance, shortShifts: a.shortShifts, meterGapLitres: a.meterGapLitres })),
     };
     const response = await complete({
       model: MODELS.SMART,
@@ -493,7 +588,7 @@ exports.aiBrief = async (req, res, next) => {
           content: 'You are the chief operating analyst for a Nigerian business group (filling stations and building-materials outlets). '
             + 'Write a briefing for the group owner from the JSON data. Use plain text only, no markdown symbols. '
             + 'Structure: one line headline; then 4 to 6 short lines each starting with "- " covering top and weakest branches, cash shortages that need investigation, '
-            + 'reports still awaiting approval or missing, and one or two concrete actions for today. Use ₦ with thousands separators. Be direct and specific, no filler.',
+            + 'attendants who are repeatedly short, meter handover gaps (possible unrecorded fuel), reports still awaiting approval or missing, and one or two concrete actions for today. Use ₦ with thousands separators. Be direct and specific, no filler.',
         },
         { role: 'user', content: JSON.stringify(compact) },
       ],
@@ -521,8 +616,8 @@ exports.ledger = async (req, res, next) => {
     };
     if (req.query.branchId) q.branchId = branches.find((b) => idEq(b._id, req.query.branchId))?._id || null;
     const entries = await BranchReport.find(q)
-      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName')
-      .sort({ reportDate: 1, branchName: 1, department: 1 })
+      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName shift attendantName')
+      .sort({ reportDate: 1, branchName: 1, department: 1, 'shift.start': 1 })
       .lean();
 
     const sum = (f) => entries.reduce((s, r) => s + (r.totals[f] || 0), 0);
@@ -548,13 +643,27 @@ exports.ledger = async (req, res, next) => {
 
 // ── Demo data (for presentations) ─────────────────────────────────────
 const DEMO_BRANCHES = [
-  { name: 'Mega Fuel – Lekki', code: 'MFLK', businessLine: 'filling_station', city: 'Lekki', state: 'Lagos', address: 'Km 18 Lekki-Epe Expressway', pumps: 6, perPump: [2300, 3100], target: 14000000 },
-  { name: 'Mega Fuel – Ikeja', code: 'MFIK', businessLine: 'filling_station', city: 'Ikeja', state: 'Lagos', address: '45 Obafemi Awolowo Way', pumps: 5, perPump: [2000, 2800], target: 12500000, leaky: true },
-  { name: 'Mega Fuel – Wuse', code: 'MFAB', businessLine: 'filling_station', city: 'Wuse II', state: 'FCT Abuja', address: 'Aminu Kano Crescent', pumps: 4, perPump: [1800, 2600], target: 9500000, silentToday: true },
+  {
+    name: 'Mega Fuel – Lekki', code: 'MFLK', businessLine: 'filling_station', city: 'Lekki', state: 'Lagos', address: 'Km 18 Lekki-Epe Expressway',
+    pumps: 4, perNozzle: [650, 1050], target: 14000000,
+    attendants: ['Chinedu Okafor', 'Aisha Bello', 'Samuel Etim', 'Grace Akpan'],
+  },
+  {
+    name: 'Mega Fuel – Ikeja', code: 'MFIK', businessLine: 'filling_station', city: 'Ikeja', state: 'Lagos', address: '45 Obafemi Awolowo Way',
+    pumps: 4, perNozzle: [550, 950], target: 12500000,
+    attendants: ['Tunde Adeyemi', 'Ngozi Eze', 'Musa Danladi', 'Blessing Okon'],
+    leakyAttendant: 'Musa Danladi', meterGapDaysAgo: 3,
+  },
+  {
+    name: 'Mega Fuel – Wuse', code: 'MFAB', businessLine: 'filling_station', city: 'Wuse II', state: 'FCT Abuja', address: 'Aminu Kano Crescent',
+    pumps: 3, perNozzle: [500, 900], target: 9500000, silentToday: true,
+    attendants: ['Ibrahim Musa', 'Halima Yusuf', 'Peter Ojo', 'Zainab Sani'],
+  },
   { name: 'BuildPro – Ajah', code: 'BPAJ', businessLine: 'building_materials', city: 'Ajah', state: 'Lagos', address: 'Abraham Adesanya Roundabout', target: 9000000 },
   { name: 'BuildPro – Port Harcourt', code: 'BPPH', businessLine: 'building_materials', city: 'Port Harcourt', state: 'Rivers', address: 'Ikwerre Road, Rumuokoro', target: 7500000 },
 ];
 const FUEL_PRICES = { PMS: 1000, AGO: 1150, DPK: 1250 };
+const DEMO_SHIFTS = [{ name: 'Morning', start: '06:00', end: '14:00' }, { name: 'Afternoon', start: '14:00', end: '22:00' }];
 const SHOP_ITEMS = [['Engine Oil 4L', 'pcs', 18500, [8, 25]], ['Engine Oil 1L', 'pcs', 5200, [15, 40]], ['Brake Fluid', 'pcs', 3500, [3, 12]], ['Car Wash', 'service', 3000, [10, 30]]];
 const GAS_ITEMS = [['LPG Refill', 'kg', 1250, [250, 600]], ['12.5kg Cylinder (new)', 'pcs', 48000, [0, 3]]];
 const BUILD_ITEMS = {
@@ -564,6 +673,8 @@ const BUILD_ITEMS = {
   'Plumbing & Electrical': [['PVC Pipe 4"', 'lengths', 7800, [15, 50]], ['2.5mm Cable (roll)', 'rolls', 46000, [2, 9]], ['WC Set', 'pcs', 95000, [0, 4]]],
 };
 const NAMES = ['Chinedu Okafor', 'Aisha Bello', 'Tunde Adeyemi', 'Ngozi Eze', 'Ibrahim Musa', 'Funke Adebayo', 'Emeka Nwosu', 'Halima Yusuf'];
+const SENDERS = ['Adewale Motors', 'Kunle Bakare', 'Chioma Nwankwo', 'Dangote Logistics', 'Femi Ogunleye', 'Uche Transport', 'Bola Ahmed', 'Yetunde Alade', 'GIG Logistics', 'Obinna Eze'];
+const BANKS = ['GTBank', 'Access', 'Zenith', 'First Bank', 'UBA', 'Opay', 'Moniepoint', 'Kuda'];
 
 function seededRandom(seed) {
   let s = seed;
@@ -582,78 +693,140 @@ exports.loadDemo = async (req, res, next) => {
     const DAYS = 21;
     const today = todayYmd();
 
+    const nozzlesFor = (spec) => Array.from({ length: spec.pumps || 0 }).flatMap((_, pi) => [1, 2].map((n) => ({
+      code: `P${pi + 1}-N${n}`, pump: `Pump ${pi + 1}`, product: pi === spec.pumps - 1 ? 'AGO' : 'PMS',
+    })));
+
     const branches = await Branch.insertMany(DEMO_BRANCHES.map((b) => ({
       companyId: req.companyId, name: b.name, code: b.code, businessLine: b.businessLine, city: b.city, state: b.state,
       address: b.address, dailySalesTarget: b.target, demo: true,
       fuelPrices: b.businessLine === 'filling_station' ? FUEL_PRICES : undefined,
+      nozzles: b.businessLine === 'filling_station' ? nozzlesFor(b) : [],
+      shifts: DEMO_SHIFTS,
       departments: DEFAULT_BRANCH_DEPARTMENTS[b.businessLine].map((name) => ({ name })),
     })));
+
+    // Approval state by age: older → fully approved; recent → still moving through the chain.
+    function applyStatus(doc, daysAgo, submittedAt) {
+      const approvals = [{ level: 'branch_manager', status: 'pending' }, { level: 'owner', status: 'pending' }];
+      doc.submittedAt = submittedAt;
+      doc.trail = [{ action: 'submitted', byName: doc.preparedByName, at: submittedAt }];
+      if (daysAgo >= 2 || (daysAgo === 1 && rand() < 0.5)) {
+        approvals[0] = { level: 'branch_manager', status: 'approved', byName: 'Branch Manager', at: new Date(submittedAt.getTime() + 3600e3) };
+        approvals[1] = { level: 'owner', status: 'approved', byName: req.user.name, at: new Date(submittedAt.getTime() + 18 * 3600e3) };
+        doc.status = 'approved';
+        doc.approvedAt = approvals[1].at;
+        doc.trail.push({ action: 'approved (branch)', byName: 'Branch Manager', at: approvals[0].at },
+          { action: 'approved (final)', byName: req.user.name, at: approvals[1].at });
+      } else if (daysAgo === 1 || rand() < 0.5) {
+        approvals[0] = { level: 'branch_manager', status: 'approved', byName: 'Branch Manager', at: new Date(submittedAt.getTime() + 3600e3) };
+        doc.status = 'pending_owner';
+        doc.trail.push({ action: 'approved (branch)', byName: 'Branch Manager', at: approvals[0].at });
+      } else {
+        doc.status = 'pending_branch';
+      }
+      doc.approvals = approvals;
+    }
 
     const docs = [];
     branches.forEach((branch, bi) => {
       const spec = DEMO_BRANCHES[bi];
-      const meters = Array.from({ length: spec.pumps || 0 }, () => between([150000, 900000]));
+      const meter = {};
+      branch.nozzles.forEach((n) => { meter[n.code] = between([150000, 900000]); });
+
       for (let i = DAYS - 1; i >= 0; i -= 1) {
         const date = addDays(today, -i);
+        const dateKey = date.replace(/-/g, '');
         const weekendBoost = [0, 6].includes(dayStart(date).getUTCDay()) ? 0.85 : 1;
+        if (i === 0 && spec.silentToday) continue;
+
         branch.departments.forEach((dept) => {
-          if (i === 0 && spec.silentToday) return;
+          // ── Forecourt: one sheet per attendant per shift, takings per nozzle ──
+          if (dept.name.startsWith('Forecourt')) {
+            DEMO_SHIFTS.forEach((shift, si) => {
+              if (i === 0 && si > 0) return; // today's afternoon shift is still running
+              const half = Math.ceil(branch.nozzles.length / 2);
+              const groups = [branch.nozzles.slice(0, half), branch.nozzles.slice(half)];
+              groups.forEach((nozzles, gi) => {
+                // Attendants rotate shifts week to week, so the same people show up across both shifts.
+                const rota = (si * 2 + gi + Math.floor(i / 7) * 2) % spec.attendants.length;
+                const attendant = spec.attendants[rota];
+                const doc = {
+                  companyId: req.companyId, branchId: branch._id, branchName: branch.name, businessLine: branch.businessLine,
+                  department: dept.name, reportDate: dayStart(date), demo: true, shift: { ...shift },
+                  attendantName: attendant, preparedByName: attendant,
+                  referenceNumber: `DSR/${branch.code}/${dateKey}/${shift.name.charAt(0)}${gi + 1}`,
+                  pumps: [], items: [], expenses: [], transfers: [],
+                };
+                let shortfall = rand() < 0.15 ? between([1000, 8000]) : 0;
+                if (attendant === spec.leakyAttendant && rand() < 0.6) shortfall = between([40000, 180000]);
+                else if (rand() < 0.03) shortfall = between([20000, 70000]);
+
+                nozzles.forEach((n, ni) => {
+                  const prevClosing = meter[n.code];
+                  let opening = prevClosing;
+                  // The planted incident: fuel sold between shifts and never recorded.
+                  if (spec.meterGapDaysAgo === i && si === 0 && gi === 0 && ni === 0) opening = prevClosing + 380;
+                  const litres = Math.round(between(spec.perNozzle) * weekendBoost * (n.product === 'AGO' ? 0.5 : 1));
+                  const pumpTest = rand() < 0.08 ? 10 : 0;
+                  const closing = opening + litres + pumpTest;
+                  meter[n.code] = closing;
+                  const price = FUEL_PRICES[n.product];
+                  let due = litres * price - (ni === 0 ? shortfall : 0);
+                  due = Math.max(0, due);
+                  const pos = Math.round(due * (0.25 + rand() * 0.15) / 100) * 100;
+                  const transfer = Math.round(due * (0.25 + rand() * 0.15) / 100) * 100;
+                  const cash = Math.max(0, due - pos - transfer);
+                  doc.pumps.push({
+                    pump: n.pump, nozzle: n.code, product: n.product, openingMeter: opening, closingMeter: closing, pumpTest,
+                    pricePerLitre: price, cash, pos, transfer, prevClosing, meterGap: opening - prevClosing,
+                  });
+                  // Itemise the transfers so they can be matched to bank alerts.
+                  let left = transfer;
+                  const parts = transfer > 300000 ? 3 : transfer > 100000 ? 2 : 1;
+                  for (let k = 0; k < parts && left > 0; k += 1) {
+                    const amt = k === parts - 1 ? left : Math.round((transfer / parts) / 100) * 100;
+                    left -= amt;
+                    doc.transfers.push({
+                      sender: pick(SENDERS), bank: pick(BANKS), nozzle: n.code, amount: amt,
+                      reference: `${pick(['NIP', 'TRF', 'FT'])}${Math.floor(rand() * 1e10).toString().padStart(10, '0')}`,
+                    });
+                  }
+                });
+                if (si === 0 && gi === 0) doc.expenses.push({ description: 'Generator diesel', amount: between([18000, 45000]) });
+                // Expenses come out of the cash drawer.
+                if (doc.expenses.length) doc.pumps[0].cash = Math.max(0, doc.pumps[0].cash - doc.expenses[0].amount);
+                const startH = Number(shift.end.slice(0, 2));
+                applyStatus(doc, i, new Date(dayStart(date).getTime() + (startH - 1) * 3600e3 + 20 * 60e3));
+                docs.push(doc);
+              });
+            });
+            return;
+          }
+
+          // ── Shop, gas and building-materials departments: one daily sheet ──
           if (i === 0 && rand() < 0.25) return; // some departments haven't reported yet today
           const doc = {
             companyId: req.companyId, branchId: branch._id, branchName: branch.name, businessLine: branch.businessLine,
             department: dept.name, reportDate: dayStart(date), demo: true,
-            referenceNumber: `DSR/${branch.code}/${date.replace(/-/g, '')}/${docs.length + 1}`,
+            referenceNumber: `DSR/${branch.code}/${dateKey}/${docs.length + 1}`,
             preparedByName: pick(NAMES), pumps: [], items: [], expenses: [],
           };
-          if (dept.name.startsWith('Forecourt')) {
-            meters.forEach((m, pi) => {
-              const product = pi < meters.length - 1 ? 'PMS' : 'AGO';
-              const litres = Math.round(between(spec.perPump) * weekendBoost * (product === 'AGO' ? 0.45 : 1));
-              doc.pumps.push({ pump: `Pump ${pi + 1}`, product, openingMeter: m, closingMeter: m + litres, pricePerLitre: FUEL_PRICES[product] });
-              meters[pi] = m + litres;
-            });
-            doc.expenses.push({ description: 'Generator diesel', amount: between([18000, 45000]) });
-          } else {
-            const catalogue = dept.name.startsWith('Lubricants') ? SHOP_ITEMS : dept.name.startsWith('Gas') ? GAS_ITEMS : BUILD_ITEMS[dept.name];
-            catalogue.forEach(([description, unit, unitPrice, range]) => {
-              const quantity = Math.round(between(range) * weekendBoost);
-              if (quantity > 0) doc.items.push({ description, unit, unitPrice, quantity });
-            });
-            if (rand() < 0.3) doc.expenses.push({ description: pick(['Loading/offloading', 'Transport', 'Security levy']), amount: between([5000, 25000]) });
-          }
-          const expected = doc.pumps.reduce((s, p) => s + (p.closingMeter - p.openingMeter) * p.pricePerLitre, 0)
-            + doc.items.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
-          const exp = doc.expenses.reduce((s, e) => s + e.amount, 0);
-          let net = expected - exp;
-          // Mostly balanced, with small rounding noise; the "leaky" branch's forecourt runs short now and then.
+          const catalogue = dept.name.startsWith('Lubricants') ? SHOP_ITEMS : dept.name.startsWith('Gas') ? GAS_ITEMS : BUILD_ITEMS[dept.name];
+          catalogue.forEach(([description, unit, unitPrice, range]) => {
+            const quantity = Math.round(between(range) * weekendBoost);
+            if (quantity > 0) doc.items.push({ description, unit, unitPrice, quantity });
+          });
+          if (rand() < 0.3) doc.expenses.push({ description: pick(['Loading/offloading', 'Transport', 'Security levy']), amount: between([5000, 25000]) });
+          const expected = doc.items.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
+          let net = expected - doc.expenses.reduce((s, e) => s + e.amount, 0);
           let shortfall = rand() < 0.15 ? between([2000, 15000]) : 0;
-          if (spec.leaky && dept.name.startsWith('Forecourt') && rand() < 0.4) shortfall = between([90000, 420000]);
-          if (!spec.leaky && rand() < 0.04) shortfall = between([60000, 150000]);
+          if (rand() < 0.04) shortfall = between([60000, 150000]);
           net -= shortfall;
           const cash = Math.round(net * (0.3 + rand() * 0.15));
           const pos = Math.round(net * (0.25 + rand() * 0.1));
           doc.collections = { cash, pos, transfer: Math.max(0, net - cash - pos), credit: 0 };
-
-          // Approval state by age: older → fully approved; recent → still moving through the chain.
-          const approvals = [{ level: 'branch_manager', status: 'pending' }, { level: 'owner', status: 'pending' }];
-          const t = new Date(dayStart(date).getTime() + 20 * 3600 * 1000);
-          doc.submittedAt = t;
-          doc.trail = [{ action: 'submitted', byName: doc.preparedByName, at: t }];
-          if (i >= 2 || (i === 1 && rand() < 0.5)) {
-            approvals[0] = { level: 'branch_manager', status: 'approved', byName: 'Branch Manager', at: new Date(t.getTime() + 3600e3) };
-            approvals[1] = { level: 'owner', status: 'approved', byName: req.user.name, at: new Date(t.getTime() + 18 * 3600e3) };
-            doc.status = 'approved';
-            doc.approvedAt = approvals[1].at;
-            doc.trail.push({ action: 'approved (branch)', byName: 'Branch Manager', at: approvals[0].at },
-              { action: 'approved (final)', byName: req.user.name, at: approvals[1].at });
-          } else if (i === 1 || rand() < 0.5) {
-            approvals[0] = { level: 'branch_manager', status: 'approved', byName: 'Branch Manager', at: new Date(t.getTime() + 3600e3) };
-            doc.status = 'pending_owner';
-            doc.trail.push({ action: 'approved (branch)', byName: 'Branch Manager', at: approvals[0].at });
-          } else {
-            doc.status = 'pending_branch';
-          }
-          doc.approvals = approvals;
+          applyStatus(doc, i, new Date(dayStart(date).getTime() + 20 * 3600 * 1000));
           docs.push(doc);
         });
       }
@@ -670,7 +843,8 @@ exports.loadDemo = async (req, res, next) => {
     // Ledger numbers in date order, continuing any real ones already issued.
     const year = new Date().getFullYear();
     let n = await BranchReport.countDocuments({ companyId: req.companyId, ledgerNumber: { $regex: `^SL/${year}/` } });
-    docs.filter((d) => d.status === 'approved').sort((a, b) => a.reportDate - b.reportDate)
+    docs.filter((d) => d.status === 'approved')
+      .sort((a, b) => (a.reportDate - b.reportDate) || String(a.shift?.start || '').localeCompare(String(b.shift?.start || '')))
       .forEach((d) => { n += 1; d.ledgerNumber = `SL/${year}/${String(n).padStart(5, '0')}`; });
 
     const models = docs.map((d) => new BranchReport(d));
