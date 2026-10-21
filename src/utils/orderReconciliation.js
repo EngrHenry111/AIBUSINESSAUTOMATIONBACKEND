@@ -94,7 +94,7 @@ async function reconcileStorefrontOrders(options = {}) {
     }
     return summary;
   } catch (err) {
-    logger.error('Order reconciliation error:', err.stack || err.message);
+    logger.error(`Order reconciliation error: ${err.stack || err.message}`);
     summary.errors.push({ reference: null, message: err.message });
     return summary;
   }

@@ -137,6 +137,7 @@ exports.createSubaccount = async (req, res, next) => {
         settlement_bank: bankCode,
         account_number: accountNumber,
         settlement_schedule: 'auto',
+        active: true,
         ...contactFields,
       });
     } else {
@@ -147,6 +148,7 @@ exports.createSubaccount = async (req, res, next) => {
         percentage_charge: PLATFORM_COMMISSION,
         description: `BizlyAI - ${bizName}`,
         settlement_schedule: 'auto',
+        active: true,
         ...contactFields,
       });
     }
@@ -226,6 +228,8 @@ exports.updateSubaccount = async (req, res, next) => {
     const bizName = (businessName || company.companyName || '').trim();
     payload.business_name = bizName;
     payload.description = `BizlyAI - ${bizName}`;
+    // A subaccount Paystack has flagged inactive never settles — re-activate on every save.
+    payload.active = true;
     if (bankCode) payload.settlement_bank = bankCode;
     if (accountNumber) payload.account_number = accountNumber;
 
