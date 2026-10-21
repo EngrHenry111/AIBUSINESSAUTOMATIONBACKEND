@@ -230,4 +230,4 @@ async function generateStructured(prompt, schema, agentType = 'knowledge_assista
   }
 }
 
-module.exports = { generateAnswer, generateWhatsAppReply, runAgent, streamAnswer, generateStructured, MODELS };
+module.exports = { complete, generateAnswer, generateWhatsAppReply, runAgent, streamAnswer, generateStructured, MODELS };
