@@ -55,7 +55,6 @@ const branchSchema = new mongoose.Schema({
   nozzles: { type: [nozzleSchema], default: [] },
   shifts: { type: [shiftSchema], default: () => DEFAULT_SHIFTS.map((x) => ({ ...x })) },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
-  demo: { type: Boolean, default: false }, // created by the demo loader — removable in one click
 }, { timestamps: true });
 
 branchSchema.index({ companyId: 1, name: 1 });

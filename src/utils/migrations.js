@@ -4,6 +4,8 @@
 // Each migration must be idempotent (safe to run again) and must never
 // throw in a way that stops the server from booting — log and move on.
 const Company = require('../models/Company');
+const Branch = require('../models/Branch');
+const BranchReport = require('../models/BranchReport');
 const logger = require('./logger');
 
 /**
@@ -52,4 +54,24 @@ async function migrateStoreEnabled() {
   }
 }
 
-module.exports = { migrateStoreEnabled };
+/**
+ * Remove sample branches/reports created by the old "Load demo group" button.
+ * That generator has been removed; branch data must only ever come from the
+ * company owner. Demo records were always stamped demo:true, so real
+ * branches and reports are never touched.
+ */
+async function purgeDemoGroupData() {
+  try {
+    const reports = await BranchReport.collection.deleteMany({ demo: true });
+    const branches = await Branch.collection.deleteMany({ demo: true });
+    if (reports.deletedCount || branches.deletedCount) {
+      logger.info(`🧹 Removed demo group data: ${branches.deletedCount} branch(es), ${reports.deletedCount} report(s)`);
+    }
+    return { branches: branches.deletedCount, reports: reports.deletedCount };
+  } catch (err) {
+    logger.error(`Demo group purge failed: ${err.message}`);
+    return { branches: 0, reports: 0, error: err.message };
+  }
+}
+
+module.exports = { migrateStoreEnabled, purgeDemoGroupData };

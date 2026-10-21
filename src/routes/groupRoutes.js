@@ -31,7 +31,5 @@ router.post('/reports/:id/submit', ctrl.submit);
 router.post('/reports/:id/approve', ctrl.approve);
 router.post('/reports/:id/reject', ctrl.reject);
 
-router.post('/demo', ctrl.loadDemo);
-router.delete('/demo', ctrl.clearDemo);
 
 module.exports = router;

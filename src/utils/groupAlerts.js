@@ -24,7 +24,7 @@ async function notifyShortage(report, branch) {
   const t = report.totals || {};
   const shortHit = t.variance <= -SHORTAGE_ALERT;
   const gapHit = (t.meterGapLitres || 0) >= METER_GAP_ALERT;
-  if ((!shortHit && !gapHit) || report.shortageAlertedAt || report.demo) return;
+  if ((!shortHit && !gapHit) || report.shortageAlertedAt) return;
 
   // Claim the alert first so a resubmit/race never double-sends.
   const claimed = await BranchReport.updateOne(

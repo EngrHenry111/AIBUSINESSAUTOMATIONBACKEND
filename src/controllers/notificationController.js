@@ -141,7 +141,7 @@ exports.getNotifications = async (req, res, next) => {
       const [awaiting, shortages] = await Promise.all([
         BranchReport.countDocuments({ ...scope, status: isOwner ? { $in: ['pending_branch', 'pending_owner'] } : 'pending_branch' }),
         BranchReport.find({
-          ...scope, demo: { $ne: true }, status: { $nin: ['draft', 'rejected'] },
+          ...scope, status: { $nin: ['draft', 'rejected'] },
           'totals.variance': { $lte: -SHORTAGE_ALERT }, submittedAt: { $gte: new Date(now - 48 * 60 * 60 * 1000) },
         }).select('branchName department totals.variance submittedAt').sort({ submittedAt: -1 }).limit(5),
       ]);
