@@ -87,6 +87,7 @@ const branchReportSchema = new mongoose.Schema({
   approvedAt: Date,
   ledgerNumber: String, // set on final approval — e.g. SL/2026/00042
   demo: { type: Boolean, default: false },
+  shortageAlertedAt: { type: Date, default: null }, // owner/manager already pinged about this shortage
 }, { timestamps: true });
 
 branchReportSchema.index({ companyId: 1, reportDate: -1 });

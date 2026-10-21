@@ -7,6 +7,9 @@ const Order = require('../models/Order');
 const Message = require('../models/Message');
 const Product = require('../models/Product');
 const Meeting = require('../models/Meeting');
+const Branch = require('../models/Branch');
+const BranchReport = require('../models/BranchReport');
+const { SHORTAGE_ALERT } = require('../utils/groupAlerts');
 const cache = require('../utils/cache');
 
 const fmtTime = (d) => new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -128,6 +131,35 @@ exports.getNotifications = async (req, res, next) => {
           url: `/meetings/${m._id}`, time: a.createdAt || now,
         }))),
     ];
+
+    // Group operations: reports waiting on this user's approval, plus recent
+    // cash shortages on branches they oversee.
+    const isOwner = ['company_owner', 'super_admin'].includes(req.user.role);
+    const managed = isOwner ? null : await Branch.find({ companyId, managerId: userId }).select('_id');
+    if (isOwner || managed.length) {
+      const scope = isOwner ? { companyId } : { companyId, branchId: { $in: managed.map((b) => b._id) } };
+      const [awaiting, shortages] = await Promise.all([
+        BranchReport.countDocuments({ ...scope, status: isOwner ? { $in: ['pending_branch', 'pending_owner'] } : 'pending_branch' }),
+        BranchReport.find({
+          ...scope, demo: { $ne: true }, status: { $nin: ['draft', 'rejected'] },
+          'totals.variance': { $lte: -SHORTAGE_ALERT }, submittedAt: { $gte: new Date(now - 48 * 60 * 60 * 1000) },
+        }).select('branchName department totals.variance submittedAt').sort({ submittedAt: -1 }).limit(5),
+      ]);
+      if (awaiting) {
+        notifications.push({
+          id: `group-awaiting-${awaiting}`, type: 'warning',
+          title: 'Reports Awaiting Approval',
+          message: `${awaiting} branch report${awaiting === 1 ? '' : 's'} waiting for your approval`,
+          url: '/group/reports?tab=awaiting', time: now,
+        });
+      }
+      shortages.forEach((r) => notifications.push({
+        id: `group-short-${r._id}`, type: 'warning',
+        title: 'Cash Shortage',
+        message: `${r.branchName} · ${r.department} is short ₦${Math.abs(Math.round(r.totals.variance)).toLocaleString()}`,
+        url: `/group/reports/${r._id}`, time: r.submittedAt,
+      }));
+    }
 
     // Sort by time descending
     notifications.sort((a, b) => new Date(b.time) - new Date(a.time));

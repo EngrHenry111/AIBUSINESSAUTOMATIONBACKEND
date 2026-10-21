@@ -9,6 +9,7 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { complete, MODELS } = require('../services/groqService');
 const logger = require('../utils/logger');
+const { alertIfShort, SHORTAGE_ALERT } = require('../utils/groupAlerts');
 
 // ── Multi-branch group operations ──────────────────────────────────────
 // Owner (company_owner / super_admin) = group level: sees every branch and
@@ -17,7 +18,6 @@ const logger = require('../utils/logger');
 // first approval for their own branch.
 
 const TZ = 'Africa/Lagos';
-const SHORTAGE_ALERT = 50000; // ₦ — a single report short by more than this raises an alert
 
 const isGroupLevel = (user) => ['company_owner', 'super_admin'].includes(user.role);
 const ymd = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: TZ });
@@ -248,6 +248,7 @@ exports.createReport = async (req, res, next) => {
     });
     if (req.body.submit) submitReport(report, branch, req.user);
     await report.save();
+    if (req.body.submit) alertIfShort(report, branch);
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'group.report_create', description: `${report.referenceNumber} · ${branch.name}`, ip: req.ip });
     res.status(201).json({ success: true, data: report });
   } catch (err) { next(err); }
@@ -267,6 +268,7 @@ exports.updateReport = async (req, res, next) => {
     if (req.body.submit) submitReport(report, branch, req.user);
     else if (report.status === 'rejected') report.status = 'draft';
     await report.save();
+    if (req.body.submit) alertIfShort(report, branch);
     res.json({ success: true, data: report });
   } catch (err) { next(err); }
 };
@@ -277,6 +279,7 @@ exports.submit = async (req, res, next) => {
     if (!['draft', 'rejected'].includes(report.status)) return next(new AppError('Report is already submitted.', 400));
     submitReport(report, branch, req.user);
     await report.save();
+    alertIfShort(report, branch);
     res.json({ success: true, data: report });
   } catch (err) { next(err); }
 };
