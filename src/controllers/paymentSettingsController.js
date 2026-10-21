@@ -221,9 +221,13 @@ exports.updateSubaccount = async (req, res, next) => {
       primary_contact_name: req.user.name,
       ...(company.profile?.phone ? { primary_contact_phone: company.profile.phone } : {}),
     };
+    // Paystack treats business_name/description as required on update, so
+    // always send them rather than only when the caller changed the name.
+    const bizName = (businessName || company.companyName || '').trim();
+    payload.business_name = bizName;
+    payload.description = `BizlyAI - ${bizName}`;
     if (bankCode) payload.settlement_bank = bankCode;
     if (accountNumber) payload.account_number = accountNumber;
-    if (businessName) payload.business_name = businessName;
 
     console.log('Updating subaccount with:', payload);
 
@@ -233,8 +237,36 @@ exports.updateSubaccount = async (req, res, next) => {
       accountName = resolved.data?.account_name || accountName;
     }
 
-    const updateResult = await paystackAPI('PUT', `/subaccount/${company.paymentSettings.paystackSubaccountCode}`, payload);
-    console.log('Paystack subaccount update response:', JSON.stringify(updateResult, null, 2));
+    let subaccountCode = company.paymentSettings.paystackSubaccountCode;
+    try {
+      const updateResult = await paystackAPI('PUT', `/subaccount/${subaccountCode}`, payload);
+      console.log('Paystack subaccount update response:', JSON.stringify(updateResult, null, 2));
+    } catch (err) {
+      // The stored code doesn't exist under the current secret key (e.g. it
+      // was created in test mode and the server now runs live) — create a
+      // fresh subaccount instead of failing forever.
+      if (!/not found|invalid subaccount/i.test(err.message || '') || !bankCode || !accountNumber) throw err;
+      logger.warn(`Subaccount ${subaccountCode} missing on Paystack for company ${req.companyId} — recreating`);
+      const created = await paystackAPI('POST', '/subaccount', {
+        ...payload,
+        percentage_charge: PLATFORM_COMMISSION,
+        settlement_schedule: 'auto',
+      });
+      subaccountCode = created.data?.subaccount_code;
+      if (!subaccountCode) return next(new AppError('Paystack did not return a subaccount. Please try again.', 502));
+      company.paymentSettings.paystackSubaccountCode = subaccountCode;
+      company.paymentSettings.paystackSubaccountId = created.data?.id ? String(created.data.id) : company.paymentSettings.paystackSubaccountId;
+    }
+
+    // A 200 from the PUT isn't proof the change landed — read the subaccount
+    // back and only persist locally if Paystack really holds the new account.
+    if (accountNumber) {
+      const live = await paystackAPI('GET', `/subaccount/${subaccountCode}`);
+      if (live.data?.account_number !== accountNumber) {
+        logger.error(`Paystack kept account ${mask(live.data?.account_number)} for ${subaccountCode} after update to ${mask(accountNumber)}`);
+        return next(new AppError('Paystack did not apply the new bank details. Please try again or contact support.', 502));
+      }
+    }
 
     if (bankCode) {
       company.paymentSettings.bankCode = bankCode;
