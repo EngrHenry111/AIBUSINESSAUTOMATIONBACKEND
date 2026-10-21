@@ -64,6 +64,9 @@ const pickReportFields = (body) => ({
   } : undefined,
   attendantName: body.attendantName !== undefined ? String(body.attendantName || '').trim().slice(0, 120) : undefined,
   attendantId: body.attendantId !== undefined ? (mongoose.isValidObjectId(body.attendantId) ? body.attendantId : null) : undefined,
+  onDuty: Array.isArray(body.onDuty)
+    ? [...new Set(body.onDuty.map((n) => String(n || '').trim().slice(0, 120)).filter(Boolean))].slice(0, 30)
+    : undefined,
   transfers: Array.isArray(body.transfers) ? body.transfers : undefined,
   reportDate: body.reportDate ? dayStart(String(body.reportDate).slice(0, 10)) : undefined,
   pumps: Array.isArray(body.pumps) ? body.pumps : undefined,
@@ -107,6 +110,10 @@ async function stampMeterGaps(report) {
 }
 
 function submitReport(report, branch, user) {
+  // A forecourt sheet belongs to one attendant. Elsewhere the name is optional.
+  if (report.pumps.length && !String(report.attendantName || '').trim()) {
+    throw new AppError('Enter the attendant who was on duty for this shift before submitting.', 400);
+  }
   report.submittedAt = new Date();
   report.approvals = [];
   // No branch manager assigned → the owner is the only approver.
@@ -176,6 +183,17 @@ function branchPayload(body) {
   });
   if (body.managerId !== undefined) out.managerId = body.managerId || null;
   if (Array.isArray(body.staff)) out.staff = body.staff.filter(Boolean);
+  if (Array.isArray(body.dutyStaff)) {
+    out.dutyStaff = body.dutyStaff
+      .filter((d) => d && String(d.name || '').trim())
+      .map((d) => ({
+        ...(d._id && mongoose.isValidObjectId(d._id) ? { _id: d._id } : {}),
+        name: String(d.name).trim().slice(0, 120),
+        role: String(d.role || '').trim().slice(0, 60),
+        phone: String(d.phone || '').trim().slice(0, 30),
+        active: d.active !== false,
+      }));
+  }
   if (Array.isArray(body.nozzles)) {
     out.nozzles = body.nozzles
       .filter((n) => n && String(n.code || '').trim())
@@ -616,7 +634,7 @@ exports.ledger = async (req, res, next) => {
     };
     if (req.query.branchId) q.branchId = branches.find((b) => idEq(b._id, req.query.branchId))?._id || null;
     const entries = await BranchReport.find(q)
-      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName shift attendantName')
+      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName shift attendantName onDuty')
       .sort({ reportDate: 1, branchName: 1, department: 1, 'shift.start': 1 })
       .lean();
 

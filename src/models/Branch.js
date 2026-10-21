@@ -25,9 +25,20 @@ const shiftSchema = new mongoose.Schema({
 }, { _id: false });
 
 const DEFAULT_SHIFTS = [
-  { name: 'Morning', start: '06:00', end: '14:00' },
-  { name: 'Afternoon', start: '14:00', end: '22:00' },
+  { name: 'Morning', start: '06:00', end: '12:00' },
+  { name: 'Afternoon', start: '12:00', end: '18:00' },
+  { name: 'Evening', start: '18:00', end: '22:00' },
 ];
+
+// Branch staff who sell but never log in (pump attendants, sales reps,
+// cashiers). Reports filed by the few app users record which of them was
+// on duty, so every naira is still tied to a named person.
+const dutyStaffSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 120 },
+  role: { type: String, trim: true, maxlength: 60, default: '' },
+  phone: { type: String, trim: true, maxlength: 30, default: '' },
+  active: { type: Boolean, default: true },
+});
 
 const branchSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
@@ -53,6 +64,7 @@ const branchSchema = new mongoose.Schema({
   },
   // Forecourt layout — filling stations only.
   nozzles: { type: [nozzleSchema], default: [] },
+  dutyStaff: { type: [dutyStaffSchema], default: [] },
   shifts: { type: [shiftSchema], default: () => DEFAULT_SHIFTS.map((x) => ({ ...x })) },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
 }, { timestamps: true });

@@ -80,6 +80,7 @@ const branchReportSchema = new mongoose.Schema({
   },
   attendantName: { type: String, trim: true, maxlength: 120 },
   attendantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  onDuty: { type: [{ type: String, trim: true, maxlength: 120 }], default: [] }, // others who sold on this shift
 
   pumps: { type: [pumpLineSchema], default: [] },
   items: { type: [itemLineSchema], default: [] },
