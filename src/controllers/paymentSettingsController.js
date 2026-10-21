@@ -62,10 +62,15 @@ exports.verifyAccount = async (req, res, next) => {
     let r;
     try {
       r = await paystackAPI('GET', `/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`);
-    } catch {
-      // Surface a clear, actionable message instead of Paystack's raw
-      // "Could not resolve account name" wording.
-      return next(new AppError('Account number not found. Please check your account number and try again.', 400));
+    } catch (err) {
+      // Only a genuine "couldn't resolve" is the user's fault — reword that one.
+      // Anything else (invalid/revoked secret key, rate limit, Paystack down)
+      // must surface as-is, or every user sees "account not found" for a
+      // problem on our side.
+      if (/could not resolve|unknown bank|invalid account/i.test(err.message || '')) {
+        return next(new AppError('Account number not found. Please check your account number and try again.', 400));
+      }
+      return next(err);
     }
 
     res.status(200).json({

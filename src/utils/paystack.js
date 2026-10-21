@@ -30,6 +30,8 @@ async function paystackAPI(method, endpoint, data) {
     const pmsg = err.response?.data?.message;
     const code = err.response?.status;
     logger.error(`Paystack ${method} ${endpoint} failed [${code || err.code}]: ${pmsg || err.message}`);
+    // Bad/revoked secret key is our misconfiguration, not the user's input.
+    if (code === 401) throw new AppError('Payment service is temporarily unavailable. Please try again later.', 503);
     if (pmsg) throw new AppError(`Paystack: ${pmsg}`, code && code < 500 ? 400 : 502);
     if (err.code === 'ECONNABORTED') throw new AppError('Paystack timed out. Please try again.', 504);
     throw new AppError('Could not reach the payment provider. Please try again.', 502);
