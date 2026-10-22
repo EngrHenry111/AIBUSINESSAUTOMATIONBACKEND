@@ -10,8 +10,15 @@ const insights = require('../controllers/groupInsightsController');
 
 // Multi-branch group operations. Per-branch access (owner / manager /
 // department head / staff) is enforced inside the controller.
+const { requireGroupPlan } = require('../utils/groupAccess');
+
 const router = express.Router();
 router.use(protect, enforceTenant);
+
+// Plan check is open to everyone so the app can show an upgrade screen;
+// every other group route needs Enterprise (or a trial).
+router.get('/access', ctrl.access);
+router.use(requireGroupPlan);
 
 router.get('/me', ctrl.me);
 router.get('/members', ctrl.members);

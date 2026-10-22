@@ -12,6 +12,7 @@ const Company = require('../models/Company');
 const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
 const logger = require('./logger');
+const { GROUP_ELIGIBLE_FILTER } = require('./groupAccess');
 
 const DAY = 24 * 60 * 60 * 1000;
 const BUCKETS = ['notDue', 'd1_30', 'd31_60', 'd61_90', 'd90plus'];
@@ -110,7 +111,9 @@ async function sendCreditReminder(customer) {
 async function runCreditReminders() {
   try {
     const weekAgo = new Date(Date.now() - 7 * DAY);
+    const eligible = await Company.find({ status: 'active', ...GROUP_ELIGIBLE_FILTER }).distinct('_id');
     const customers = await GroupCreditCustomer.find({
+      companyId: { $in: eligible },
       active: true, autoRemind: true, balance: { $gt: 0 },
       $and: [
         { $or: [{ phone: { $nin: ['', null] } }, { email: { $nin: ['', null] } }] },

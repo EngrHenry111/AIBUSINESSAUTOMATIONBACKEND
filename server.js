@@ -86,6 +86,9 @@ async function bootstrap() {
     setTimeout(runCreditReminders, 3 * 60 * 1000);
     setInterval(runCreditReminders, 6 * 60 * 60 * 1000);
     logger.info('✅ Monthly group report + credit reminders scheduled');
+    const { runEnterpriseRenewalReminders } = require('./src/utils/enterpriseRenewals');
+    setTimeout(runEnterpriseRenewalReminders, 4 * 60 * 1000);
+    setInterval(runEnterpriseRenewalReminders, 6 * 60 * 60 * 1000);
 
     const { checkMatterReminders } = require('./src/utils/matterReminders');
     checkMatterReminders();

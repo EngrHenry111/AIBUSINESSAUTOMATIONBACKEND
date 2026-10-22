@@ -9,6 +9,12 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
+const Branch = require('../models/Branch');
+const { ENTERPRISE_PRICING, enterpriseQuote } = require('../utils/enterprisePricing');
+
+async function activeBranchCount(companyId) {
+  return Branch.countDocuments({ companyId, status: 'active' });
+}
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -128,6 +134,7 @@ exports.getPlans = async (req, res) => {
       annualDisplay: `₦${(plan.annualAmount).toLocaleString()}`,
       savings: Math.round(((plan.monthlyAmount * 12 - plan.annualAmount) / (plan.monthlyAmount * 12)) * 100),
       features: plan.features,
+      ...(id === 'enterprise' ? { pricing: ENTERPRISE_PRICING } : {}),
     })),
   });
 };
@@ -142,9 +149,16 @@ exports.initializePayment = async (req, res, next) => {
     if (!company) return next(new AppError('Company not found.', 404));
 
     const selectedPlan = PLANS[plan];
-    const amount = billingCycle === 'annual'
+    let amount = billingCycle === 'annual'
       ? selectedPlan.annualAmount
       : selectedPlan.monthlyAmount;
+    let branches;
+    // Enterprise is priced by branch count, worked out here — never trusted from the client.
+    if (plan === 'enterprise') {
+      branches = await activeBranchCount(company._id);
+      const quote = enterpriseQuote(branches);
+      amount = billingCycle === 'annual' ? quote.annual : quote.monthly;
+    }
 
     const metadata = {
       companyId: req.companyId.toString(),
@@ -152,6 +166,7 @@ exports.initializePayment = async (req, res, next) => {
       plan,
       billingCycle,
       companyName: company.companyName,
+      ...(branches !== undefined ? { branches } : {}),
     };
 
     const response = await paystackAPI('POST', '/transaction/initialize', {
@@ -195,7 +210,10 @@ exports.verifyPayment = async (req, res, next) => {
     const { metadata, amount } = response.data;
     const { companyId, plan, billingCycle } = metadata;
 
-    await upgradePlan(companyId, plan, billingCycle, reference, amount / 100);
+    if (String(companyId) !== String(req.companyId) && req.user.role !== 'super_admin') {
+      return next(new AppError('This payment belongs to a different account.', 403));
+    }
+    await upgradePlan(companyId, plan, billingCycle, reference, amount / 100, { branches: metadata.branches });
 
     res.status(200).json({
       success: true,
@@ -431,7 +449,7 @@ exports.webhook = async (req, res) => {
             logger.error(`School fee webhook credit failed for ${reference}: ${e.stack || e.message}`);
           }
         } else if (metadata?.companyId && metadata?.plan) {
-          await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100);
+          await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100, { branches: metadata.branches });
         }
         break;
       }
@@ -613,12 +631,24 @@ exports.cancelSubscription = async (req, res, next) => {
 };
 
 // ── Internal: upgrade company plan ───────────────────────────────────────
-async function upgradePlan(companyId, plan, billingCycle, reference, amount) {
+async function upgradePlan(companyId, plan, billingCycle, reference, amount, extra = {}) {
   const planConfig = PLANS[plan];
   if (!planConfig) return;
 
+  // The verify call and the webhook both land here for the same charge —
+  // only the first one may move the billing period.
+  if (reference && await Payment.exists({ reference, status: 'success' })) return;
+
   const now = new Date();
-  const periodEnd = new Date(now);
+  // Enterprise renewals paid early extend the current period instead of
+  // throwing away the days already paid for.
+  let start = now;
+  if (plan === 'enterprise') {
+    const current = await Company.findById(companyId).select('subscription');
+    const end = current?.subscription?.currentPeriodEnd;
+    if (current?.subscription?.plan === 'enterprise' && end && new Date(end) > now) start = new Date(end);
+  }
+  const periodEnd = new Date(start);
   if (billingCycle === 'annual') {
     periodEnd.setFullYear(periodEnd.getFullYear() + 1);
   } else {
@@ -632,6 +662,8 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount) {
     'subscription.currentPeriodEnd': periodEnd,
     'subscription.lastPaymentReference': reference,
     'subscription.lastPaymentAmount': amount,
+    'subscription.billingCycle': billingCycle,
+    ...(plan === 'enterprise' && extra.branches !== undefined ? { 'subscription.enterpriseBranches': Number(extra.branches) || 0 } : {}),
     'limits.maxUsers': planConfig.features.maxUsers,
     'limits.maxDocuments': planConfig.features.maxDocuments,
     'limits.maxQuestionsPerMonth': planConfig.features.maxQuestionsPerMonth,
@@ -659,3 +691,24 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount) {
 
   logger.info(`✅ Plan upgraded: company ${companyId} → ${plan} (${billingCycle})`);
 }
+// ── GET /payments/enterprise-quote — price for this company's branch count ─
+exports.enterpriseQuote = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.companyId).select('subscription');
+    const branches = await activeBranchCount(req.companyId);
+    const sub = company?.subscription || {};
+    res.status(200).json({
+      success: true,
+      data: {
+        ...enterpriseQuote(branches),
+        activeBranches: branches,
+        current: sub.plan === 'enterprise' ? {
+          paidBranches: sub.enterpriseBranches || null,
+          periodEnd: sub.currentPeriodEnd || null,
+          billingCycle: sub.billingCycle || 'monthly',
+          status: sub.status,
+        } : null,
+      },
+    });
+  } catch (err) { next(err); }
+};

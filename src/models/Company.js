@@ -41,6 +41,12 @@ const companySchema = new mongoose.Schema({
     paystackPlanCode: String,
     stripeCustomerId: String,
     stripeSubscriptionId: String,
+    // Enterprise: branches covered by the last payment, and which renewal
+    // reminder (period end + days-before) was last emailed.
+    enterpriseBranches: Number,
+    renewalReminderFor: String,
+    lastPaymentReference: String,
+    lastPaymentAmount: Number,
   },
   // The currency new invoices/orders default to, and which currencies this
   // company is willing to bill in. Distinct from the legacy, unused

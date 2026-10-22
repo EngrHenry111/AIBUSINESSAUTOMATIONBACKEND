@@ -828,6 +828,27 @@ exports.sendDigestNow = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// GET /group/access — may this company use Group Operations, and what would Enterprise cost?
+exports.access = async (req, res, next) => {
+  try {
+    const { groupAccessFor } = require('../utils/groupAccess');
+    const { enterpriseQuote } = require('../utils/enterprisePricing');
+    const access = groupAccessFor(req.company, req.user);
+    const branches = await Branch.countDocuments({ companyId: req.companyId, status: 'active' });
+    const sub = req.company?.subscription || {};
+    res.json({
+      success: true,
+      data: {
+        ...access,
+        plan: sub.plan || 'trial',
+        status: sub.status || 'active',
+        periodEnd: sub.currentPeriodEnd || null,
+        quote: enterpriseQuote(branches),
+      },
+    });
+  } catch (err) { next(err); }
+};
+
 // GET /group/monthly-report?month=YYYY-MM — the branded monthly PDF.
 exports.monthlyReport = async (req, res, next) => {
   try {

@@ -14,6 +14,7 @@ const BranchReport = require('../models/BranchReport');
 const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
 const { attendantBreakdown } = require('./attendantBreakdown');
+const { GROUP_ELIGIBLE_FILTER } = require('./groupAccess');
 const logger = require('./logger');
 
 const TZ = 'Africa/Lagos';
@@ -230,6 +231,7 @@ async function runDueGroupDigests() {
       status: 'active',
       'groupDigest.enabled': { $ne: false },
       'groupDigest.lastSentYmd': { $ne: today },
+      ...GROUP_ELIGIBLE_FILTER,
     }).select('groupDigest');
 
     for (const c of due) {
@@ -263,6 +265,7 @@ async function runDueMonthlyReports() {
       'groupDigest.enabled': { $ne: false },
       'groupDigest.email': { $ne: false },
       'groupDigest.lastMonthlyYm': { $ne: lastMonth },
+      ...GROUP_ELIGIBLE_FILTER,
     }).select('_id');
     for (const c of due) {
       // eslint-disable-next-line no-await-in-loop

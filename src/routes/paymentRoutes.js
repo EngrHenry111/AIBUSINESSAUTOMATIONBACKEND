@@ -14,6 +14,7 @@ router.post('/webhook', express.raw({ type: '*/*' }), ctrl.webhook);
 router.use(protect);
 
 router.get('/plans', ctrl.getPlans);
+router.get('/enterprise-quote', ctrl.enterpriseQuote);
 router.post('/initialize', requireRole('company_owner', 'super_admin'), ctrl.initializePayment);
 router.get('/verify/:reference', ctrl.verifyPayment);
 router.get('/history', ctrl.getHistory);
