@@ -10,6 +10,7 @@ const { writeAuditLog } = require('../utils/auditLog');
 const { complete, MODELS } = require('../services/groqService');
 const logger = require('../utils/logger');
 const { alertIfShort, SHORTAGE_ALERT, METER_GAP_ALERT } = require('../utils/groupAlerts');
+const { attendantBreakdown } = require('../utils/attendantBreakdown');
 
 // ── Multi-branch group operations ──────────────────────────────────────
 // Owner (company_owner / super_admin) = group level: sees every branch and
@@ -91,9 +92,9 @@ async function previousClosings(branchId, date, shiftStart, excludeId, codes) {
   await Promise.all(codes.map(async (code) => {
     const prev = await BranchReport.findOne({ ...base, 'pumps.nozzle': code })
       .sort({ reportDate: -1, 'shift.start': -1, createdAt: -1 })
-      .select('pumps.nozzle pumps.closingMeter attendantName shift reportDate').lean();
+      .select('pumps.nozzle pumps.closingMeter pumps.attendant attendantName shift reportDate').lean();
     const line = prev?.pumps.find((p) => p.nozzle === code);
-    if (line) out[code] = { closing: line.closingMeter, attendant: prev.attendantName, shift: prev.shift?.name, date: ymd(prev.reportDate) };
+    if (line) out[code] = { closing: line.closingMeter, attendant: line.attendant || prev.attendantName, shift: prev.shift?.name, date: ymd(prev.reportDate) };
   }));
   return out;
 }
@@ -110,9 +111,12 @@ async function stampMeterGaps(report) {
 }
 
 function submitReport(report, branch, user) {
-  // A forecourt sheet belongs to one attendant. Elsewhere the name is optional.
-  if (report.pumps.length && !String(report.attendantName || '').trim()) {
-    throw new AppError('Enter the attendant who was on duty for this shift before submitting.', 400);
+  // Every nozzle on a forecourt sheet must name who handled it (its own
+  // attendant, or the sheet's default). Elsewhere the name is optional.
+  const fallback = String(report.attendantName || '').trim();
+  const unnamed = report.pumps.filter((p) => !String(p.attendant || '').trim() && !fallback);
+  if (unnamed.length) {
+    throw new AppError(`Enter who handled ${unnamed.map((p) => p.nozzle || p.pump).join(', ')} before submitting.`, 400);
   }
   report.submittedAt = new Date();
   report.approvals = [];
@@ -458,7 +462,10 @@ async function buildOverview(req) {
     branchId: { $in: branchIds },
     status: { $ne: 'draft' },
     reportDate: { $gte: dayStart(from), $lte: dayStart(to) },
-  }).select('branchId branchName businessLine department status reportDate totals referenceNumber attendantName shift').lean();
+  }).select([
+    'branchId branchName businessLine department status reportDate totals referenceNumber attendantName attendants shift collections.credit',
+    'pumps.nozzle pumps.attendant pumps.amount pumps.variance pumps.meterGap pumps.cash pumps.pos pumps.transfer expenses.amount expenses.paidBy',
+  ].join(' ')).lean();
 
   const live = reports.filter((r) => r.status !== 'rejected');
   const sum = (arr, f) => arr.reduce((s, r) => s + (f(r) || 0), 0);
@@ -510,7 +517,10 @@ async function buildOverview(req) {
     .forEach((r) => alerts.push({
       type: 'shortage', severity: r.totals.variance <= -SHORTAGE_ALERT * 4 ? 'high' : 'medium',
       reportId: r._id, branch: r.branchName, department: r.department, date: ymd(r.reportDate), amount: r.totals.variance,
-      message: `${r.branchName} · ${r.attendantName ? `${r.attendantName} (${r.shift?.name || ""} shift)` : r.department} is short ₦${Math.abs(Math.round(r.totals.variance)).toLocaleString()} on ${ymd(r.reportDate)}`,
+      message: `${r.branchName} · ${r.shift?.name ? `${r.shift.name} shift` : r.department} is short ₦${Math.abs(Math.round(r.totals.variance)).toLocaleString()} on ${ymd(r.reportDate)}${(() => {
+        const who = attendantBreakdown(r).filter((a) => a.variance <= -1000).map((a) => `${a.name}${a.nozzles.length ? ` (${a.nozzles.join(', ')})` : ''}`);
+        return who.length ? `: ${who.join(', ')}` : '';
+      })()}`,
     }));
   perBranch.filter((b) => b.missingToday.length).forEach((b) => alerts.push({
     type: 'missing', severity: b.departmentsReportedToday === 0 ? 'high' : 'low', branch: b.name,
@@ -527,26 +537,29 @@ async function buildOverview(req) {
     message: `${b.name} is at ${b.achievement}% of its sales target for this period`,
   }));
 
-  // Attendant watch: who handles the money on each shift, and how often they come up short.
+  // Attendant watch: who handled the money, on which nozzles, and how often they came up short.
   const att = {};
-  live.filter((r) => r.attendantName).forEach((r) => {
-    const key = `${r.attendantName}|${r.branchName}`;
-    att[key] = att[key] || { name: r.attendantName, branch: r.branchName, shifts: 0, sales: 0, variance: 0, shortShifts: 0, meterGapLitres: 0 };
-    const a = att[key];
-    a.shifts += 1;
-    a.sales += r.totals.expectedSales;
-    a.variance += r.totals.variance;
-    a.meterGapLitres += r.totals.meterGapLitres || 0;
-    if (r.totals.variance <= -5000) a.shortShifts += 1;
+  live.forEach((r) => {
+    attendantBreakdown(r).forEach((p) => {
+      const key = `${p.name}|${r.branchName}`;
+      att[key] = att[key] || { name: p.name, branch: r.branchName, shifts: 0, sales: 0, variance: 0, shortShifts: 0, meterGapLitres: 0, nozzles: [] };
+      const a = att[key];
+      a.shifts += 1;
+      a.sales += p.sales;
+      a.variance += p.variance;
+      a.meterGapLitres += p.gap;
+      p.nozzles.forEach((n) => { if (!a.nozzles.includes(n)) a.nozzles.push(n); });
+      if (p.variance <= -5000) a.shortShifts += 1;
+    });
   });
-  const attendants = Object.values(att).sort((a, b) => a.variance - b.variance);
+  const attendants = Object.values(att).map((a) => ({ ...a, nozzles: a.nozzles.sort() })).sort((a, b) => a.variance - b.variance);
   attendants.filter((a) => a.shortShifts >= 3).slice(0, 5).forEach((a) => alerts.push({
     type: 'attendant', severity: a.variance <= -SHORTAGE_ALERT * 4 ? 'high' : 'medium', branch: a.branch,
     message: `${a.name} (${a.branch}) was short on ${a.shortShifts} of ${a.shifts} shifts, ₦${Math.abs(Math.round(a.variance)).toLocaleString()} in total`,
   }));
   live.filter((r) => (r.totals.meterGapLitres || 0) >= METER_GAP_ALERT).slice(0, 6).forEach((r) => alerts.push({
     type: 'meter', severity: 'high', reportId: r._id, branch: r.branchName, date: ymd(r.reportDate),
-    message: `Meter handover gap of ${Math.round(r.totals.meterGapLitres).toLocaleString()} L at ${r.branchName}${r.shift?.name ? `, ${r.shift.name} shift` : ''} on ${ymd(r.reportDate)}${r.attendantName ? ` (${r.attendantName})` : ''}: opening didn't match the last closing`,
+    message: `Meter handover gap of ${Math.round(r.totals.meterGapLitres).toLocaleString()} L at ${r.branchName}${r.shift?.name ? `, ${r.shift.name} shift` : ''} on ${ymd(r.reportDate)} (${(r.pumps || []).filter((p) => Math.abs(p.meterGap || 0) >= 1).map((p) => `${p.nozzle}${p.attendant ? ` · ${p.attendant}` : ''}`).join(', ') || r.attendantName || 'unknown'}): opening didn't match the last closing`,
   }));
   const sevRank = { high: 0, medium: 1, low: 2 };
   alerts.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
@@ -634,7 +647,7 @@ exports.ledger = async (req, res, next) => {
     };
     if (req.query.branchId) q.branchId = branches.find((b) => idEq(b._id, req.query.branchId))?._id || null;
     const entries = await BranchReport.find(q)
-      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName shift attendantName onDuty')
+      .select('ledgerNumber referenceNumber branchName businessLine department reportDate totals approvals approvedAt preparedByName shift attendantName attendants onDuty')
       .sort({ reportDate: 1, branchName: 1, department: 1, 'shift.start': 1 })
       .lean();
 

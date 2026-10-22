@@ -7,6 +7,7 @@ const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
 const { sendSMS } = require('../services/smsService');
 const logger = require('./logger');
+const { attendantBreakdown } = require('./attendantBreakdown');
 
 // A submitted report short by at least this much (₦) pings the owner and the
 // branch manager straight away — email, WhatsApp (from the business's own
@@ -43,15 +44,21 @@ async function notifyShortage(report, branch) {
 
   const link = `${APP_URL}/group/reports/${report._id}`;
   const short = naira(Math.abs(t.variance));
-  const who = [report.shift?.name && `${report.shift.name} shift${report.shift.start ? ` (${report.shift.start}–${report.shift.end})` : ''}`, report.attendantName && `Attendant: ${report.attendantName}`].filter(Boolean);
+  const people = report.attendants?.length ? report.attendants : [report.attendantName].filter(Boolean);
+  const who = [report.shift?.name && `${report.shift.name} shift${report.shift.start ? ` (${report.shift.start}–${report.shift.end})` : ''}`, people.length && `On duty: ${people.join(', ')}`].filter(Boolean);
+  const shortNozzles = attendantBreakdown(report.toObject ? report.toObject() : report)
+    .filter((a) => a.variance <= -1000)
+    .sort((x, y) => x.variance - y.variance)
+    .map((a) => `${a.name}${a.nozzles.length ? ` (${a.nozzles.join(', ')})` : ''}: short ${naira(Math.abs(a.variance))}`);
   const gapLines = report.pumps.filter((p) => Math.abs(p.meterGap || 0) >= 1)
-    .map((p) => `${p.nozzle}: opened at ${p.openingMeter.toLocaleString()}, last closing was ${Number(p.prevClosing).toLocaleString()} (${p.meterGap > 0 ? '+' : ''}${p.meterGap.toLocaleString()} L)`);
+    .map((p) => `${p.nozzle}${p.attendant ? ` (${p.attendant})` : ''}: opened at ${p.openingMeter.toLocaleString()}, last closing was ${Number(p.prevClosing).toLocaleString()} (${p.meterGap > 0 ? '+' : ''}${p.meterGap.toLocaleString()} L)`);
   const headline = shortHit ? `⚠️ CASH SHORTAGE: ${short}` : `⚠️ METER GAP: ${Math.round(t.meterGapLitres).toLocaleString()} L`;
   const text = [
     headline,
     `${report.branchName} · ${report.department}`,
     `Date: ${day(report.reportDate)}`,
     ...who,
+    ...(shortNozzles.length ? ['Who is short:', ...shortNozzles] : []),
     ...(gapLines.length ? ['Meter handover mismatch:', ...gapLines] : []),
     `Expected sales: ${naira(t.expectedSales)}`,
     `Collected: ${naira(t.collected)}${t.expenses ? ` (+ ${naira(t.expenses)} expenses)` : ''}`,
@@ -67,7 +74,7 @@ async function notifyShortage(report, branch) {
         <div style="font-size:28px;font-weight:bold;color:#b91c1c;margin-top:4px">${shortHit ? short : `${Math.round(t.meterGapLitres).toLocaleString()} L`}</div>
         <div style="color:#7f1d1d">${esc(report.branchName)} · ${esc(report.department)} · ${day(report.reportDate)}</div>
         ${who.length ? `<div style="color:#7f1d1d;margin-top:4px">${esc(who.join(' · '))}</div>` : ''}
-        ${gapLines.map((g) => `<div style="color:#7f1d1d;margin-top:4px;font-size:13px">${esc(g)}</div>`).join('')}
+        ${[...shortNozzles, ...gapLines].map((g) => `<div style="color:#7f1d1d;margin-top:4px;font-size:13px">${esc(g)}</div>`).join('')}
       </div>
       <table style="width:100%;margin-top:16px;font-size:14px;border-collapse:collapse">
         <tr><td style="padding:6px 0;color:#64748b">Expected sales</td><td style="text-align:right">${naira(t.expectedSales)}</td></tr>

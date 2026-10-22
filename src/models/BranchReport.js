@@ -12,6 +12,7 @@ const mongoose = require('mongoose');
 const pumpLineSchema = new mongoose.Schema({
   pump: { type: String, required: true, trim: true },   // e.g. "Pump 2"
   nozzle: { type: String, trim: true, default: '' },    // e.g. "P2-N1"
+  attendant: { type: String, trim: true, maxlength: 120, default: '' }, // who handled this nozzle on the shift
   product: { type: String, enum: ['PMS', 'AGO', 'DPK', 'LPG'], default: 'PMS' },
   openingMeter: { type: Number, required: true, min: 0 },
   closingMeter: { type: Number, required: true, min: 0 },
@@ -47,6 +48,7 @@ const itemLineSchema = new mongoose.Schema({
 const expenseLineSchema = new mongoose.Schema({
   description: { type: String, required: true, trim: true, maxlength: 200 },
   amount: { type: Number, required: true, min: 0 },
+  paidBy: { type: String, trim: true, maxlength: 120, default: '' }, // attendant whose cash paid it
 }, { _id: false });
 
 const approvalSchema = new mongoose.Schema({
@@ -81,6 +83,9 @@ const branchReportSchema = new mongoose.Schema({
   attendantName: { type: String, trim: true, maxlength: 120 },
   attendantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   onDuty: { type: [{ type: String, trim: true, maxlength: 120 }], default: [] }, // others who sold on this shift
+  // Computed: everyone who sold on this report (nozzle attendants, or the
+  // report-level sales person). Used for listing and filtering by person.
+  attendants: { type: [String], default: [] },
 
   pumps: { type: [pumpLineSchema], default: [] },
   items: { type: [itemLineSchema], default: [] },
@@ -128,6 +133,13 @@ branchReportSchema.index({ branchId: 1, 'pumps.nozzle': 1, reportDate: -1 });
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 branchReportSchema.pre('validate', function computeTotals(next) {
+  // A nozzle with no attendant of its own was handled by the sheet's default attendant.
+  const fallback = String(this.attendantName || '').trim();
+  this.pumps.forEach((p) => { if (!String(p.attendant || '').trim() && fallback) p.attendant = fallback; });
+  const names = this.pumps.length ? this.pumps.map((p) => String(p.attendant || '').trim()) : [fallback];
+  this.attendants = [...new Set(names.filter(Boolean))];
+  if (!fallback && this.attendants.length === 1) this.attendantName = this.attendants[0];
+
   let litres = 0;
   let expected = 0;
   let pumpTest = 0;
