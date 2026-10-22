@@ -249,4 +249,34 @@ async function runDueGroupDigests() {
   }
 }
 
-module.exports = { buildGroupDigest, digestText, sendGroupDigest, runDueGroupDigests };
+// Interval job: on/after the 1st, email last month's PDF report once.
+async function runDueMonthlyReports() {
+  try {
+    const { emailMonthlyReport, prevMonth } = require('./groupMonthlyReport');
+    const today = ymdOf(new Date());
+    const lastMonth = prevMonth(today.slice(0, 7));
+    if (nowHm() < '07:00') return; // send in the morning, not at midnight
+    const companyIds = await Branch.distinct('companyId', {});
+    if (!companyIds.length) return;
+    const due = await Company.find({
+      _id: { $in: companyIds }, status: 'active',
+      'groupDigest.enabled': { $ne: false },
+      'groupDigest.email': { $ne: false },
+      'groupDigest.lastMonthlyYm': { $ne: lastMonth },
+    }).select('_id');
+    for (const c of due) {
+      // eslint-disable-next-line no-await-in-loop
+      const claimed = await Company.updateOne({ _id: c._id, 'groupDigest.lastMonthlyYm': { $ne: lastMonth } }, { $set: { 'groupDigest.lastMonthlyYm': lastMonth } });
+      if (!claimed.modifiedCount) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const had = await BranchReport.exists({ companyId: c._id, reportDate: { $gte: dayStart(`${lastMonth}-01`), $lt: dayStart(`${today.slice(0, 7)}-01`) } });
+      if (!had) continue; // nothing happened that month — don't send an empty report
+      // eslint-disable-next-line no-await-in-loop
+      await emailMonthlyReport(c._id, lastMonth).catch((e) => logger.error(`Monthly report failed for ${c._id}: ${e.message}`));
+    }
+  } catch (err) {
+    logger.error(`Monthly report run failed: ${err.message}`);
+  }
+}
+
+module.exports = { buildGroupDigest, digestText, sendGroupDigest, runDueGroupDigests, runDueMonthlyReports };

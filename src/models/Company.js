@@ -202,6 +202,7 @@ const companySchema = new mongoose.Schema({
       email: { type: String, trim: true, lowercase: true, maxlength: 160 },
     }],
     lastSentYmd: { type: String, default: null },
+    lastMonthlyYm: { type: String, default: null }, // month whose PDF report was last emailed
   },
 }, { timestamps: true });
 

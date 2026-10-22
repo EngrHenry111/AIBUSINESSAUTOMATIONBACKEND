@@ -18,12 +18,14 @@ const pumpLineSchema = new mongoose.Schema({
   closingMeter: { type: Number, required: true, min: 0 },
   pumpTest: { type: Number, default: 0, min: 0 },       // litres dispensed for calibration and returned to tank
   pricePerLitre: { type: Number, required: true, min: 0 },
+  costPerLitre: { type: Number, default: 0, min: 0 },   // snapshot of the branch's cost price when sold
   cash: { type: Number, default: 0, min: 0 },
   pos: { type: Number, default: 0, min: 0 },
   transfer: { type: Number, default: 0, min: 0 },
   // Computed
   litres: { type: Number, default: 0 },
   amount: { type: Number, default: 0 },
+  cost: { type: Number, default: 0 },
   variance: { type: Number, default: 0 },
   prevClosing: { type: Number, default: null },         // previous shift's closing on this nozzle
   meterGap: { type: Number, default: 0 },               // opening − prevClosing; ≠ 0 means unrecorded or reversed litres
@@ -38,11 +40,24 @@ const transferSchema = new mongoose.Schema({
 }, { _id: false });
 
 const itemLineSchema = new mongoose.Schema({
+  itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'GroupStockItem', default: null }, // stock line it came out of
   description: { type: String, required: true, trim: true, maxlength: 200 },
   quantity: { type: Number, required: true, min: 0 },
   unit: { type: String, trim: true, default: 'pcs' },
   unitPrice: { type: Number, required: true, min: 0 },
+  unitCost: { type: Number, default: 0, min: 0 },       // snapshot of cost price when sold
   amount: { type: Number, default: 0 },
+  cost: { type: Number, default: 0 },
+}, { _id: false });
+
+// Fuel or goods given on credit to a registered credit customer.
+const creditSaleSchema = new mongoose.Schema({
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'GroupCreditCustomer', required: true },
+  customerName: String,
+  amount: { type: Number, required: true, min: 0 },
+  nozzle: { type: String, trim: true, maxlength: 20, default: '' }, // forecourt: which nozzle dispensed it
+  vehicle: { type: String, trim: true, maxlength: 40, default: '' },
+  reference: { type: String, trim: true, maxlength: 80, default: '' }, // coupon / LPO / waybill no.
 }, { _id: false });
 
 const expenseLineSchema = new mongoose.Schema({
@@ -97,6 +112,7 @@ const branchReportSchema = new mongoose.Schema({
   },
   expenses: { type: [expenseLineSchema], default: [] },
   transfers: { type: [transferSchema], default: [] },     // itemised bank transfers, for checking against bank alerts
+  creditSales: { type: [creditSaleSchema], default: [] }, // when present, collections.credit is their total
   notes: { type: String, maxlength: 2000 },
 
   // Computed on save (see pre-validate) — never trusted from the client.
@@ -108,6 +124,9 @@ const branchReportSchema = new mongoose.Schema({
     variance: { type: Number, default: 0 }, // collected + expenses − expected; negative = shortage
     pumpTest: { type: Number, default: 0 },
     meterGapLitres: { type: Number, default: 0 }, // sum of |meterGap| across nozzles
+    cost: { type: Number, default: 0 },           // cost of what was sold (fuel cost × litres + item costs)
+    grossProfit: { type: Number, default: 0 },    // sales − cost
+    netProfit: { type: Number, default: 0 },      // gross profit − expenses
   },
 
   status: {
@@ -124,6 +143,9 @@ const branchReportSchema = new mongoose.Schema({
   approvedAt: Date,
   ledgerNumber: String, // set on final approval — e.g. SL/2026/00042
   shortageAlertedAt: { type: Date, default: null }, // owner/manager already pinged about this shortage
+  // Side effects applied when the report left draft — undone if it's sent back.
+  stockPosted: { type: Boolean, default: false },
+  creditPosted: { type: Boolean, default: false },
 }, { timestamps: true });
 
 branchReportSchema.index({ companyId: 1, reportDate: -1 });
@@ -144,9 +166,12 @@ branchReportSchema.pre('validate', function computeTotals(next) {
   let expected = 0;
   let pumpTest = 0;
   let gap = 0;
+  let cost = 0;
   this.pumps.forEach((p) => {
     p.litres = round2(Math.max(0, p.closingMeter - p.openingMeter - (p.pumpTest || 0)));
     p.amount = round2(p.litres * p.pricePerLitre);
+    p.cost = round2(p.litres * (p.costPerLitre || 0));
+    cost += p.cost;
     p.variance = round2((p.cash || 0) + (p.pos || 0) + (p.transfer || 0) - p.amount);
     litres += p.litres;
     expected += p.amount;
@@ -155,8 +180,16 @@ branchReportSchema.pre('validate', function computeTotals(next) {
   });
   this.items.forEach((it) => {
     it.amount = round2(it.quantity * it.unitPrice);
+    it.cost = round2(it.quantity * (it.unitCost || 0));
     expected += it.amount;
+    cost += it.cost;
   });
+  if (this.creditSales.length) {
+    this.collections = {
+      ...(this.collections?.toObject?.() || this.collections || {}),
+      credit: round2(this.creditSales.reduce((s, x) => s + (x.amount || 0), 0)),
+    };
+  }
   // When takings are recorded per nozzle, the nozzle lines are the source of
   // truth for cash/POS/transfer; credit sales stay at report level.
   if (this.pumps.some((p) => p.cash || p.pos || p.transfer)) {
@@ -178,6 +211,9 @@ branchReportSchema.pre('validate', function computeTotals(next) {
     variance: round2(collected + exp - expected),
     pumpTest: round2(pumpTest),
     meterGapLitres: round2(gap),
+    cost: round2(cost),
+    grossProfit: round2(expected - cost),
+    netProfit: round2(expected - cost - exp),
   };
   next();
 });

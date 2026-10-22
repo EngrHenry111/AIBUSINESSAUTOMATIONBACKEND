@@ -61,7 +61,20 @@ const branchSchema = new mongoose.Schema({
     PMS: { type: Number, default: 0 },
     AGO: { type: Number, default: 0 },
     DPK: { type: Number, default: 0 },
+    LPG: { type: Number, default: 0 },
   },
+  // What the branch pays per litre (depot/landing cost) — for profit.
+  fuelCosts: {
+    PMS: { type: Number, default: 0 },
+    AGO: { type: Number, default: 0 },
+    DPK: { type: Number, default: 0 },
+    LPG: { type: Number, default: 0 },
+  },
+  posTerminals: [{
+    terminalId: { type: String, trim: true, maxlength: 40 },
+    bank: { type: String, trim: true, maxlength: 60 },
+    label: { type: String, trim: true, maxlength: 60 },
+  }],
   // Forecourt layout — filling stations only.
   nozzles: { type: [nozzleSchema], default: [] },
   dutyStaff: { type: [dutyStaffSchema], default: [] },

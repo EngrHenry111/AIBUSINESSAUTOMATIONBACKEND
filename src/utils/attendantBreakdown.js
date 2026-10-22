@@ -19,7 +19,16 @@ function attendantBreakdown(r) {
   const perNozzle = lines.some((p) => p.cash || p.pos || p.transfer);
   const names = new Set(lines.map((p) => p.attendant));
   const direct = {};
-  let shared = r.collections?.credit || 0;
+  // Credit given from a specific nozzle is that attendant's (they collected no
+  // cash for it); credit not tied to a nozzle is shared like other items.
+  const nozzleOwner = new Map(lines.map((p) => [p.nozzle, p.attendant]));
+  const itemised = r.creditSales || [];
+  let shared = itemised.length ? 0 : (r.collections?.credit || 0);
+  itemised.forEach((x) => {
+    const who = x.nozzle && nozzleOwner.get(x.nozzle);
+    if (who) direct[who] = (direct[who] || 0) + (x.amount || 0);
+    else shared += x.amount || 0;
+  });
   (r.expenses || []).forEach((e) => {
     if (e.paidBy && names.has(e.paidBy)) direct[e.paidBy] = (direct[e.paidBy] || 0) + (e.amount || 0);
     else shared += e.amount || 0;

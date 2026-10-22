@@ -13,6 +13,9 @@ const { alertIfShort, SHORTAGE_ALERT, METER_GAP_ALERT } = require('../utils/grou
 const { attendantBreakdown } = require('../utils/attendantBreakdown');
 const Company = require('../models/Company');
 const { buildGroupDigest, digestText, sendGroupDigest } = require('../utils/groupDigest');
+const { postReportEffects, reverseReportEffects } = require('../utils/groupPosting');
+const GroupStockItem = require('../models/GroupStockItem');
+const GroupCreditCustomer = require('../models/GroupCreditCustomer');
 
 // ── Multi-branch group operations ──────────────────────────────────────
 // Owner (company_owner / super_admin) = group level: sees every branch and
@@ -71,6 +74,12 @@ const pickReportFields = (body) => ({
     ? [...new Set(body.onDuty.map((n) => String(n || '').trim().slice(0, 120)).filter(Boolean))].slice(0, 30)
     : undefined,
   transfers: Array.isArray(body.transfers) ? body.transfers : undefined,
+  creditSales: Array.isArray(body.creditSales)
+    ? body.creditSales.filter((x) => x && mongoose.isValidObjectId(x.customerId) && Number(x.amount) > 0).map((x) => ({
+      customerId: x.customerId, amount: Number(x.amount),
+      nozzle: String(x.nozzle || '').slice(0, 20), vehicle: String(x.vehicle || '').slice(0, 40), reference: String(x.reference || '').slice(0, 80),
+    }))
+    : undefined,
   reportDate: body.reportDate ? dayStart(String(body.reportDate).slice(0, 10)) : undefined,
   pumps: Array.isArray(body.pumps) ? body.pumps : undefined,
   items: Array.isArray(body.items) ? body.items : undefined,
@@ -95,7 +104,9 @@ async function previousClosings(branchId, date, shiftStart, excludeId, codes) {
     const prev = await BranchReport.findOne({ ...base, 'pumps.nozzle': code })
       .sort({ reportDate: -1, 'shift.start': -1, createdAt: -1 })
       .select('pumps.nozzle pumps.closingMeter pumps.attendant attendantName shift reportDate').lean();
-    const line = prev?.pumps.find((p) => p.nozzle === code);
+    // A nozzle split for a mid-shift price change has several lines — the
+    // one that closed highest is where the next shift picks up.
+    const line = (prev?.pumps || []).filter((p) => p.nozzle === code).sort((a, b) => b.closingMeter - a.closingMeter)[0];
     if (line) out[code] = { closing: line.closingMeter, attendant: line.attendant || prev.attendantName, shift: prev.shift?.name, date: ymd(prev.reportDate) };
   }));
   return out;
@@ -105,11 +116,55 @@ async function stampMeterGaps(report) {
   const codes = [...new Set(report.pumps.map((p) => p.nozzle).filter(Boolean))];
   if (!codes.length) return;
   const prev = await previousClosings(report.branchId, report.reportDate, report.shift?.start, report._id, codes);
-  report.pumps.forEach((p) => {
-    const last = prev[p.nozzle];
-    p.prevClosing = last ? last.closing : null;
-    p.meterGap = last ? Math.round((p.openingMeter - last.closing) * 100) / 100 : 0;
+  // Lines for the same nozzle (price change mid-shift) chain together: the
+  // first is checked against the previous shift, each later one against the
+  // line before it on this same sheet.
+  const byNozzle = {};
+  report.pumps.forEach((p) => { if (p.nozzle) (byNozzle[p.nozzle] = byNozzle[p.nozzle] || []).push(p); });
+  report.pumps.forEach((p) => { if (!p.nozzle) { p.prevClosing = null; p.meterGap = 0; } });
+  Object.entries(byNozzle).forEach(([code, lines]) => {
+    lines.sort((a, b) => a.openingMeter - b.openingMeter);
+    lines.forEach((p, i) => {
+      const before = i === 0 ? prev[code]?.closing : lines[i - 1].closingMeter;
+      p.prevClosing = before ?? null;
+      p.meterGap = before != null ? Math.round((p.openingMeter - before) * 100) / 100 : 0;
+    });
   });
+}
+
+// Fill in what the client must not decide: cost prices (for profit), stock
+// item details, and credit customer names. Also notes credit-limit breaches.
+async function prepareLines(report, branch) {
+  report.pumps.forEach((p) => { p.costPerLitre = branch.fuelCosts?.[p.product] || 0; });
+
+  const itemIds = report.items.map((it) => it.itemId).filter(Boolean);
+  if (itemIds.length) {
+    const stock = await GroupStockItem.find({ _id: { $in: itemIds }, branchId: branch._id });
+    const byId = new Map(stock.map((x) => [String(x._id), x]));
+    report.items.forEach((it) => {
+      const s = it.itemId && byId.get(String(it.itemId));
+      if (!s) { it.itemId = null; return; }
+      it.unitCost = s.costPrice || 0;
+      if (!it.unit || it.unit === 'pcs') it.unit = s.unit || it.unit;
+    });
+  }
+
+  if (report.creditSales.length) {
+    const ids = [...new Set(report.creditSales.map((x) => String(x.customerId)))];
+    const customers = await GroupCreditCustomer.find({ _id: { $in: ids }, companyId: report.companyId, active: true });
+    const byId = new Map(customers.map((c) => [String(c._id), c]));
+    report.creditSales = report.creditSales.filter((x) => byId.has(String(x.customerId)));
+    report.creditSales.forEach((x) => { x.customerName = byId.get(String(x.customerId)).name; });
+    const perCustomer = {};
+    report.creditSales.forEach((x) => { perCustomer[x.customerId] = (perCustomer[x.customerId] || 0) + x.amount; });
+    Object.entries(perCustomer).forEach(([id, amt]) => {
+      const c = byId.get(String(id));
+      const already = report.creditPosted ? 0 : c.balance;
+      if (c.creditLimit && already + amt > c.creditLimit) {
+        report.trail.push({ action: 'credit limit exceeded', byName: 'System', comment: `${c.name}: balance would be ₦${Math.round(already + amt).toLocaleString()} (limit ₦${c.creditLimit.toLocaleString()})` });
+      }
+    });
+  }
 }
 
 function submitReport(report, branch, user) {
@@ -189,6 +244,14 @@ function branchPayload(body) {
   });
   if (body.managerId !== undefined) out.managerId = body.managerId || null;
   if (Array.isArray(body.staff)) out.staff = body.staff.filter(Boolean);
+  if (body.fuelCosts && typeof body.fuelCosts === 'object') {
+    out.fuelCosts = Object.fromEntries(['PMS', 'AGO', 'DPK', 'LPG'].map((k) => [k, Math.max(0, Number(body.fuelCosts[k]) || 0)]));
+  }
+  if (Array.isArray(body.posTerminals)) {
+    out.posTerminals = body.posTerminals
+      .filter((t) => t && String(t.terminalId || '').trim())
+      .map((t) => ({ terminalId: String(t.terminalId).trim().slice(0, 40), bank: String(t.bank || '').trim().slice(0, 60), label: String(t.label || '').trim().slice(0, 60) }));
+  }
   if (Array.isArray(body.dutyStaff)) {
     out.dutyStaff = body.dutyStaff
       .filter((d) => d && String(d.name || '').trim())
@@ -335,10 +398,11 @@ exports.createReport = async (req, res, next) => {
       preparedByName: req.user.name,
       trail: [{ action: 'created', byName: req.user.name }],
     });
+    await prepareLines(report, branch);
     if (req.body.submit) submitReport(report, branch, req.user);
     await stampMeterGaps(report);
     await report.save();
-    if (req.body.submit) alertIfShort(report, branch);
+    if (req.body.submit) { await postReportEffects(report, req.user.name); await report.save(); alertIfShort(report, branch); }
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'group.report_create', description: `${report.referenceNumber} · ${branch.name}`, ip: req.ip });
     res.status(201).json({ success: true, data: report });
   } catch (err) { next(err); }
@@ -355,11 +419,12 @@ exports.updateReport = async (req, res, next) => {
     const fields = pickReportFields(req.body);
     Object.entries(fields).forEach(([k, v]) => { if (v !== undefined) report[k] = v; });
     report.trail.push({ action: 'edited', byName: req.user.name });
+    await prepareLines(report, branch);
     if (req.body.submit) submitReport(report, branch, req.user);
     else if (report.status === 'rejected') report.status = 'draft';
     await stampMeterGaps(report);
     await report.save();
-    if (req.body.submit) alertIfShort(report, branch);
+    if (req.body.submit) { await postReportEffects(report, req.user.name); await report.save(); alertIfShort(report, branch); }
     res.json({ success: true, data: report });
   } catch (err) { next(err); }
 };
@@ -368,8 +433,11 @@ exports.submit = async (req, res, next) => {
   try {
     const { report, branch } = await loadReport(req, req.params.id);
     if (!['draft', 'rejected'].includes(report.status)) return next(new AppError('Report is already submitted.', 400));
+    await prepareLines(report, branch);
     submitReport(report, branch, req.user);
     await stampMeterGaps(report);
+    await report.save();
+    await postReportEffects(report, req.user.name);
     await report.save();
     alertIfShort(report, branch);
     res.json({ success: true, data: report });
@@ -423,6 +491,7 @@ exports.reject = async (req, res, next) => {
     Object.assign(step, { status: 'rejected', byId: req.user._id, byName: req.user.name, comment: reason, at: new Date() });
     report.status = 'rejected';
     report.trail.push({ action: 'rejected', byName: req.user.name, comment: reason });
+    await reverseReportEffects(report, req.user.name);
     await report.save();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'group.report_reject', description: report.referenceNumber, ip: req.ip });
     res.json({ success: true, data: report });
@@ -465,7 +534,7 @@ async function buildOverview(req) {
     status: { $ne: 'draft' },
     reportDate: { $gte: dayStart(from), $lte: dayStart(to) },
   }).select([
-    'branchId branchName businessLine department status reportDate totals referenceNumber attendantName attendants shift collections.credit',
+    'branchId branchName businessLine department status reportDate totals referenceNumber attendantName attendants shift collections.credit creditSales.nozzle creditSales.amount',
     'pumps.nozzle pumps.attendant pumps.amount pumps.variance pumps.meterGap pumps.cash pumps.pos pumps.transfer expenses.amount expenses.paidBy',
   ].join(' ')).lean();
 
@@ -488,6 +557,9 @@ async function buildOverview(req) {
       collected: sum(rs, (r) => r.totals.collected),
       variance: sum(rs, (r) => r.totals.variance),
       litres: sum(rs, (r) => r.totals.litres),
+      cost: sum(rs, (r) => r.totals.cost),
+      grossProfit: sum(rs, (r) => r.totals.grossProfit),
+      netProfit: sum(rs, (r) => r.totals.netProfit),
       pending: rs.filter((r) => r.status.startsWith('pending')).length,
       target,
       achievement: target ? Math.round((sales / target) * 100) : null,
@@ -563,6 +635,15 @@ async function buildOverview(req) {
     type: 'meter', severity: 'high', reportId: r._id, branch: r.branchName, date: ymd(r.reportDate),
     message: `Meter handover gap of ${Math.round(r.totals.meterGapLitres).toLocaleString()} L at ${r.branchName}${r.shift?.name ? `, ${r.shift.name} shift` : ''} on ${ymd(r.reportDate)} (${(r.pumps || []).filter((p) => Math.abs(p.meterGap || 0) >= 1).map((p) => `${p.nozzle}${p.attendant ? ` · ${p.attendant}` : ''}`).join(', ') || r.attendantName || 'unknown'}): opening didn't match the last closing`,
   }));
+  const lowStock = await GroupStockItem.find({
+    companyId: req.companyId, branchId: { $in: branchIds }, active: true, reorderLevel: { $gt: 0 },
+    $expr: { $lte: ['$quantity', '$reorderLevel'] },
+  }).select('name quantity unit reorderLevel branchId').lean();
+  const branchNameById = new Map(branches.map((b) => [String(b._id), b.name]));
+  lowStock.slice(0, 6).forEach((it) => alerts.push({
+    type: 'stock', severity: it.quantity <= 0 ? 'high' : 'medium', branch: branchNameById.get(String(it.branchId)),
+    message: `${branchNameById.get(String(it.branchId))}: ${it.name} is ${it.quantity <= 0 ? 'out of stock' : `low (${it.quantity.toLocaleString()} ${it.unit} left, reorder at ${it.reorderLevel.toLocaleString()})`}`,
+  }));
   const sevRank = { high: 0, medium: 1, low: 2 };
   alerts.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
 
@@ -577,6 +658,9 @@ async function buildOverview(req) {
       variance: sum(live, (r) => r.totals.variance),
       shortages: sum(live.filter((r) => r.totals.variance < 0), (r) => r.totals.variance),
       meterGapLitres: sum(live, (r) => r.totals.meterGapLitres),
+      grossProfit: sum(live, (r) => r.totals.grossProfit),
+      netProfit: sum(live, (r) => r.totals.netProfit),
+      lowStock: lowStock.length,
       litres: sum(live, (r) => r.totals.litres),
       pendingApprovals: live.filter((r) => r.status.startsWith('pending')).length,
       todaySales: sum(todayLive, (r) => r.totals.expectedSales),
@@ -743,3 +827,19 @@ exports.sendDigestNow = async (req, res, next) => {
     res.json({ success: true, data: result });
   } catch (err) { next(err); }
 };
+
+// GET /group/monthly-report?month=YYYY-MM — the branded monthly PDF.
+exports.monthlyReport = async (req, res, next) => {
+  try {
+    if (!isGroupLevel(req.user)) return next(new AppError('Only the owner can download the monthly report.', 403));
+    const { monthlyPdfBuffer } = require('../utils/groupMonthlyReport');
+    const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? req.query.month : todayYmd().slice(0, 7);
+    const { data, pdf } = await monthlyPdfBuffer(req.companyId, month);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${data.company.replace(/[^\w]+/g, '-')}-${month}-report.pdf"`);
+    res.send(pdf);
+  } catch (err) { next(err); }
+};
+
+// Shared with the stock / credit / POS / profit controllers.
+exports.helpers = { isGroupLevel, userBranchRole, visibleBranches, loadBranch, ymd, todayYmd, dayStart, addDays, idEq };

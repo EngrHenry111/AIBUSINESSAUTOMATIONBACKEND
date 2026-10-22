@@ -79,6 +79,13 @@ async function bootstrap() {
     setTimeout(runDueGroupDigests, 60 * 1000);
     setInterval(runDueGroupDigests, 5 * 60 * 1000);
     logger.info('✅ Nightly group summary checker scheduled (runs every 5min)');
+    const { runDueMonthlyReports } = require('./src/utils/groupDigest');
+    setTimeout(runDueMonthlyReports, 2 * 60 * 1000);
+    setInterval(runDueMonthlyReports, 60 * 60 * 1000);
+    const { runCreditReminders } = require('./src/utils/groupCredit');
+    setTimeout(runCreditReminders, 3 * 60 * 1000);
+    setInterval(runCreditReminders, 6 * 60 * 60 * 1000);
+    logger.info('✅ Monthly group report + credit reminders scheduled');
 
     const { checkMatterReminders } = require('./src/utils/matterReminders');
     checkMatterReminders();
