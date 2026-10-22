@@ -15,6 +15,9 @@ router.get('/members', ctrl.members);
 router.get('/overview', ctrl.overview);
 router.post('/ai-brief', ctrl.aiBrief);
 router.get('/ledger', ctrl.ledger);
+router.get('/digest', ctrl.getDigest);
+router.put('/digest', ctrl.updateDigest);
+router.post('/digest/send-now', ctrl.sendDigestNow);
 
 router.get('/branches', ctrl.listBranches);
 router.post('/branches', ctrl.createBranch);

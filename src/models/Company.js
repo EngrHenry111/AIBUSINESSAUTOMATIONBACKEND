@@ -187,6 +187,22 @@ const companySchema = new mongoose.Schema({
     sendPayrollSMS: { type: Boolean, default: true },
     sendLowStockSMS: { type: Boolean, default: true },
   },
+
+  // ── Nightly group summary (multi-branch owners) ──────────────────────────
+  // Sent once a day after `time` (Africa/Lagos) to the owner and any extra
+  // recipients — only for companies that actually have branches.
+  groupDigest: {
+    enabled: { type: Boolean, default: true },
+    time: { type: String, default: '21:00' },
+    whatsapp: { type: Boolean, default: true },
+    email: { type: Boolean, default: true },
+    recipients: [{
+      name: { type: String, trim: true, maxlength: 120 },
+      phone: { type: String, trim: true, maxlength: 30 },
+      email: { type: String, trim: true, lowercase: true, maxlength: 160 },
+    }],
+    lastSentYmd: { type: String, default: null },
+  },
 }, { timestamps: true });
 
 companySchema.index({ slug: 1 });

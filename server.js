@@ -75,6 +75,11 @@ async function bootstrap() {
     logger.info('✅ Meeting reminder checker scheduled (runs every 30min)');
 
     // ── Legal matters — hearing / deadline / limitation reminders ──────────
+    const { runDueGroupDigests } = require('./src/utils/groupDigest');
+    setTimeout(runDueGroupDigests, 60 * 1000);
+    setInterval(runDueGroupDigests, 5 * 60 * 1000);
+    logger.info('✅ Nightly group summary checker scheduled (runs every 5min)');
+
     const { checkMatterReminders } = require('./src/utils/matterReminders');
     checkMatterReminders();
     setInterval(checkMatterReminders, 60 * 60 * 1000);

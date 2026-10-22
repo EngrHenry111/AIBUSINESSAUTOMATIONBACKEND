@@ -11,6 +11,8 @@ const { complete, MODELS } = require('../services/groqService');
 const logger = require('../utils/logger');
 const { alertIfShort, SHORTAGE_ALERT, METER_GAP_ALERT } = require('../utils/groupAlerts');
 const { attendantBreakdown } = require('../utils/attendantBreakdown');
+const Company = require('../models/Company');
+const { buildGroupDigest, digestText, sendGroupDigest } = require('../utils/groupDigest');
 
 // ── Multi-branch group operations ──────────────────────────────────────
 // Owner (company_owner / super_admin) = group level: sees every branch and
@@ -669,5 +671,75 @@ exports.ledger = async (req, res, next) => {
         totals: { sales: sum('expectedSales'), collected: sum('collected'), expenses: sum('expenses'), variance: sum('variance'), litres: sum('litres'), count: entries.length },
       },
     });
+  } catch (err) { next(err); }
+};
+
+// ── Nightly summary settings ──────────────────────────────────────────
+const digestSettings = (c) => {
+  const g = c.groupDigest || {};
+  return {
+    enabled: g.enabled !== false,
+    time: g.time || '21:00',
+    whatsapp: g.whatsapp !== false,
+    email: g.email !== false,
+    recipients: (g.recipients || []).map((r) => ({ name: r.name || '', phone: r.phone || '', email: r.email || '' })),
+    lastSentYmd: g.lastSentYmd || null,
+  };
+};
+
+// GET /group/digest — settings plus a live preview of today's message.
+exports.getDigest = async (req, res, next) => {
+  try {
+    if (!isGroupLevel(req.user)) return next(new AppError('Only the owner can manage the nightly summary.', 403));
+    const company = await Company.findById(req.companyId).select('groupDigest profile.phone');
+    const digest = await buildGroupDigest(req.companyId);
+    const owner = await User.findById(req.user._id).select('phone email');
+    res.json({
+      success: true,
+      data: {
+        settings: digestSettings(company),
+        preview: digest ? digestText(digest) : null,
+        ownerPhone: owner?.phone || company.profile?.phone || '',
+        ownerEmail: owner?.email || '',
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// PUT /group/digest
+exports.updateDigest = async (req, res, next) => {
+  try {
+    if (!isGroupLevel(req.user)) return next(new AppError('Only the owner can manage the nightly summary.', 403));
+    const b = req.body || {};
+    const company = await Company.findById(req.companyId);
+    const g = company.groupDigest || {};
+    if (b.enabled !== undefined) g.enabled = Boolean(b.enabled);
+    if (b.time !== undefined) {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.time))) return next(new AppError('Choose a valid time.', 400));
+      if (b.time !== g.time) g.lastSentYmd = null; // new time applies from today
+      g.time = b.time;
+    }
+    if (b.whatsapp !== undefined) g.whatsapp = Boolean(b.whatsapp);
+    if (b.email !== undefined) g.email = Boolean(b.email);
+    if (Array.isArray(b.recipients)) {
+      g.recipients = b.recipients
+        .map((r) => ({ name: String(r.name || '').trim().slice(0, 120), phone: String(r.phone || '').trim().slice(0, 30), email: String(r.email || '').trim().toLowerCase().slice(0, 160) }))
+        .filter((r) => r.phone || r.email)
+        .slice(0, 20);
+    }
+    company.groupDigest = g;
+    company.markModified('groupDigest');
+    await company.save();
+    res.json({ success: true, data: digestSettings(company) });
+  } catch (err) { next(err); }
+};
+
+// POST /group/digest/send-now — send today's summary immediately (test).
+exports.sendDigestNow = async (req, res, next) => {
+  try {
+    if (!isGroupLevel(req.user)) return next(new AppError('Only the owner can send the summary.', 403));
+    const result = await sendGroupDigest(req.companyId);
+    if (!result.results && !result.sent) return next(new AppError(result.reason || 'Nothing to send yet.', 400));
+    res.json({ success: true, data: result });
   } catch (err) { next(err); }
 };
