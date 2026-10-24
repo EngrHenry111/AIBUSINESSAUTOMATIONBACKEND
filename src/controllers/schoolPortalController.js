@@ -29,7 +29,7 @@ async function childrenFor(companyId, studentIds) {
   ]);
   const map = new Map(owing.map((o) => [String(o._id), o.balance]));
   return students.map((s) => ({
-    _id: s._id, name: nameOf(s), firstName: s.firstName, admissionNumber: s.admissionNumber,
+    _id: s._id, name: nameOf(s), firstName: s.firstName, admissionNumber: s.admissionNumber, regNumber: s.regNumber || null,
     className: s.classId?.name || null, status: s.status, outstanding: round2(map.get(String(s._id)) || 0),
   }));
 }
@@ -113,7 +113,7 @@ exports.getChild = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: {
-        student: { _id: student._id, name: nameOf(student), admissionNumber: student.admissionNumber, className: student.classId?.name || null, status: student.status },
+        student: { _id: student._id, name: nameOf(student), admissionNumber: student.admissionNumber, regNumber: student.regNumber || null, className: student.classId?.name || null, status: student.status },
         bankAccount,
         bills,
         outstanding: round2(bills.filter((b) => ['unpaid', 'partial'].includes(b.status)).reduce((s, b) => s + Math.max(0, b.balance), 0)),

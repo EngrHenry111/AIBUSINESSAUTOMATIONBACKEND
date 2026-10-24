@@ -9,6 +9,9 @@ const schoolClassSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 },
   level: { type: Number, default: 0 },
   section: { type: String, trim: true, maxlength: 60 }, // Nursery, Primary, Junior Secondary…
+  // Groups arms for register numbers: JSS 1A and JSS 1B are both "JSS1" and
+  // share one count. Blank = worked out from the name (utils/schoolRegNumbers).
+  levelCode: { type: String, trim: true, uppercase: true, maxlength: 12 },
   classTeacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   subjects: [{ type: String, trim: true, maxlength: 100 }],
   // Who teaches which subject in this class — scopes teachers' score entry.

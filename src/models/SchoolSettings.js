@@ -42,6 +42,10 @@ const schoolSettingsSchema = new mongoose.Schema({
 
   admissionsOpen: { type: Boolean, default: true },
   admissionNumberPrefix: { type: String, trim: true, uppercase: true, maxlength: 12, default: 'STU' },
+  // Class register numbers, counted per level per session. Tokens: {PREFIX}
+  // {LEVEL} {SESSION} (2026-2027) {START} (2026) {SERIAL} (001).
+  regNumberFormat: { type: String, trim: true, maxlength: 60, default: '{PREFIX}/{LEVEL}/{SESSION}/{SERIAL}' },
+  sessionChangedAt: Date, // when currentSession last moved on — promotion defaults key off it
   onlinePaymentsEnabled: { type: Boolean, default: true },
   minimumOnlinePayment: { type: Number, min: 0, default: 1000 },
 

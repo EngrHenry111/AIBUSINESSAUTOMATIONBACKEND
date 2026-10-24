@@ -19,13 +19,14 @@ const {
   TERMS, oid, escapeRe, slugify, getSettings, nextNumber, reserveNumbers, formatNumber,
   emitSchool, todayStr, billNewStudent,
 } = require('../utils/school');
+const regNumbers = require('../utils/schoolRegNumbers');
 
 const SETTINGS_FIELDS = [
   'schoolName', 'motto', 'address', 'phone', 'email', 'logo', 'currentSession', 'currentTerm',
-  'termStart', 'termEnd', 'admissionsOpen', 'admissionNumberPrefix', 'onlinePaymentsEnabled',
+  'termStart', 'termEnd', 'admissionsOpen', 'admissionNumberPrefix', 'regNumberFormat', 'onlinePaymentsEnabled',
   'minimumOnlinePayment', 'caMax', 'gradingScale', 'nextTermBegins', 'reminders', 'bankAccounts',
 ];
-const CLASS_FIELDS = ['name', 'level', 'section', 'classTeacher', 'subjects', 'subjectTeachers', 'capacity', 'active'];
+const CLASS_FIELDS = ['name', 'level', 'levelCode', 'section', 'classTeacher', 'subjects', 'subjectTeachers', 'capacity', 'active'];
 const STUDENT_FIELDS = [
   'firstName', 'lastName', 'otherNames', 'gender', 'dateOfBirth', 'classId', 'status', 'guardian',
   'address', 'stateOfOrigin', 'religion', 'bloodGroup', 'medicalNotes', 'previousSchool', 'photo', 'admittedAt',
@@ -101,6 +102,11 @@ exports.updateSettings = async (req, res, next) => {
       };
     }
     if (body.nextTermBegins === '') body.nextTermBegins = null;
+    if (body.regNumberFormat !== undefined) {
+      body.regNumberFormat = String(body.regNumberFormat || '').trim() || regNumbers.DEFAULT_FORMAT;
+      const bad = regNumbers.validateFormat(body.regNumberFormat);
+      if (bad) return next(new AppError(bad, 400));
+    }
     if (body.bankAccounts !== undefined) {
       const b = body.bankAccounts || {};
       body.bankAccounts = {
@@ -116,9 +122,17 @@ exports.updateSettings = async (req, res, next) => {
       }
       body.slug = slug;
     }
+    const sessionChanged = body.currentSession && body.currentSession !== settings.currentSession;
+    const wordingChanged = (body.regNumberFormat && body.regNumberFormat !== settings.regNumberFormat)
+      || (body.admissionNumberPrefix !== undefined && body.admissionNumberPrefix !== settings.admissionNumberPrefix);
+    if (sessionChanged) body.sessionChangedAt = new Date();
     Object.assign(settings, body);
     await settings.save();
+    // New session: fresh register numbers for every class level.
+    if (sessionChanged) await regNumbers.activateSession(req.companyId);
+    else if (wordingChanged) await regNumbers.reformatSession(req.companyId);
     emitSchool(io(req), req.companyId, 'settings');
+    if (sessionChanged || wordingChanged) emitSchool(io(req), req.companyId, 'students');
     res.status(200).json({ success: true, data: settings });
   } catch (err) { next(err); }
 };
@@ -231,6 +245,7 @@ exports.getDashboard = async (req, res, next) => {
 // ── Classes ──────────────────────────────────────────────────────────────
 async function cleanClassBody(req) {
   const body = pick(req.body, CLASS_FIELDS);
+  if (body.levelCode !== undefined) body.levelCode = String(body.levelCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || undefined;
   if (body.subjects !== undefined) {
     body.subjects = [...new Set((Array.isArray(body.subjects) ? body.subjects : String(body.subjects).split(','))
       .map((s) => String(s).trim()).filter(Boolean))].slice(0, 40);
@@ -259,7 +274,7 @@ exports.getClasses = async (req, res, next) => {
       Student.aggregate([{ $match: { companyId: oid(req.companyId), status: 'active' } }, { $group: { _id: '$classId', count: { $sum: 1 } } }]),
     ]);
     const map = new Map(counts.map((c) => [String(c._id), c.count]));
-    res.status(200).json({ success: true, data: classes.map((c) => ({ ...c, studentCount: map.get(String(c._id)) || 0 })) });
+    res.status(200).json({ success: true, data: classes.map((c) => ({ ...c, regLevel: regNumbers.levelCodeOf(c), studentCount: map.get(String(c._id)) || 0 })) });
   } catch (err) { next(err); }
 };
 
@@ -279,8 +294,17 @@ exports.createClass = async (req, res, next) => {
 exports.updateClass = async (req, res, next) => {
   try {
     const cls = await findOwned(SchoolClass, req, req.params.id, 'Class');
-    Object.assign(cls, await cleanClassBody(req));
+    const levelBefore = regNumbers.levelCodeOf(cls);
+    const body = await cleanClassBody(req);
+    Object.assign(cls, body);
     await cls.save();
+    // The class joined another level's count: renumber both levels.
+    const levelAfter = regNumbers.levelCodeOf(cls);
+    if (levelAfter !== levelBefore) {
+      await regNumbers.renumberLevel(req.companyId, levelBefore);
+      await regNumbers.renumberLevel(req.companyId, levelAfter);
+      emitSchool(io(req), req.companyId, 'students');
+    }
     emitSchool(io(req), req.companyId, 'classes');
     res.status(200).json({ success: true, data: cls });
   } catch (err) {
@@ -317,7 +341,7 @@ exports.getStudents = async (req, res, next) => {
     }
     if (req.query.search) {
       const re = new RegExp(escapeRe(String(req.query.search).trim()), 'i');
-      filter.$or = [{ firstName: re }, { lastName: re }, { otherNames: re }, { admissionNumber: re }, { 'guardian.name': re }, { 'guardian.phone': re }];
+      filter.$or = [{ firstName: re }, { lastName: re }, { otherNames: re }, { admissionNumber: re }, { regNumber: re }, { 'guardian.name': re }, { 'guardian.phone': re }];
     }
     const [students, total] = await Promise.all([
       Student.find(filter).sort({ lastName: 1, firstName: 1 }).skip((page - 1) * limit).limit(limit).populate('classId', 'name').lean(),
@@ -337,7 +361,9 @@ exports.getStudents = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-async function createStudentRecord(req, body, extra = {}) {
+// `skipRegNumber`: the caller numbers a batch together (bulk import) so the
+// batch is issued alphabetically.
+async function createStudentRecord(req, body, extra = {}, { skipRegNumber = false } = {}) {
   const data = pick(body, STUDENT_FIELDS);
   data.guardian = cleanGuardian(data.guardian);
   data.classId = await assertClass(req.companyId, data.classId);
@@ -346,7 +372,14 @@ async function createStudentRecord(req, body, extra = {}) {
   if (!admissionNumber) admissionNumber = await nextNumber(req.companyId, 'admission');
   try {
     const student = await Student.create({ ...data, ...extra, admissionNumber, companyId: req.companyId });
-    if (student.classId && student.status === 'active') await billNewStudent(student, req.user._id);
+    if (student.classId && student.status === 'active') {
+      await billNewStudent(student, req.user._id);
+      if (!skipRegNumber) {
+        await regNumbers.issue(req.companyId, [student._id]);
+        const fresh = await Student.findById(student._id).select('regNumber regSession').lean();
+        Object.assign(student, { regNumber: fresh?.regNumber, regSession: fresh?.regSession });
+      }
+    }
     // Their own transfer account, in the background (Paystack can be slow).
     const settings = await getSettings(req.companyId);
     if (settings.bankAccounts?.enabled && settings.bankAccounts?.autoCreate !== false && student.status === 'active') {
@@ -394,12 +427,13 @@ exports.bulkCreateStudents = async (req, res, next) => {
           gender, dateOfBirth: r.dateOfBirth || undefined, classId,
           address: r.address,
           guardian: { name: r.guardianName, phone: r.guardianPhone, email: r.guardianEmail, relationship: r.guardianRelationship },
-        });
+        }, {}, { skipRegNumber: true });
         created.push(s._id);
       } catch (e) {
         failed.push({ row: i + 1, name: [r.lastName, r.firstName].filter(Boolean).join(' '), error: e.message });
       }
     }
+    if (created.length) await regNumbers.issue(req.companyId, created);
     emitSchool(io(req), req.companyId, 'students');
     res.status(200).json({ success: true, data: { created: created.length, failed } });
   } catch (err) { next(err); }
@@ -412,7 +446,7 @@ exports.getStudent = async (req, res, next) => {
     await student.populate('classId', 'name subjects level');
     const settings = await getSettings(req.companyId);
     const teacher = isTeacher(req); // teachers don't see fees
-    const [bills, payments, attendance, application] = await Promise.all([
+    const [bills, payments, attendance, application, regHistory] = await Promise.all([
       teacher ? [] : FeeBill.find({ companyId: req.companyId, studentId: student._id }).sort({ createdAt: -1 }).lean(),
       teacher ? [] : FeePayment.find({ companyId: req.companyId, studentId: student._id }).sort({ paidAt: -1 }).limit(100).populate('recordedBy', 'name').lean(),
       AttendanceRecord.aggregate([
@@ -422,12 +456,13 @@ exports.getStudent = async (req, res, next) => {
         { $group: { _id: '$records.status', count: { $sum: 1 } } },
       ]),
       student.applicationId ? AdmissionApplication.findById(student.applicationId).select('applicationNumber createdAt source').lean() : null,
+      regNumbers.history(req.companyId, student._id),
     ]);
     const outstanding = bills.filter((b) => ['unpaid', 'partial'].includes(b.status)).reduce((s, b) => s + b.balance, 0);
     res.status(200).json({
       success: true,
       data: {
-        student, bills, payments, application, outstanding, feesHidden: teacher,
+        student, bills, payments, application, outstanding, feesHidden: teacher, regHistory,
         ...(!teacher && await (async () => {
           const VirtualAccount = require('../models/VirtualAccount');
           const BankTransfer = require('../models/BankTransfer');
@@ -451,12 +486,15 @@ exports.updateStudent = async (req, res, next) => {
     if (body.guardian !== undefined) body.guardian = cleanGuardian(body.guardian);
     if (body.classId !== undefined) body.classId = await assertClass(req.companyId, body.classId);
     const classChanged = body.classId !== undefined && String(body.classId) !== String(student.classId);
+    const reactivated = body.status === 'active' && student.status !== 'active';
     if (body.status && body.status !== 'active' && student.status === 'active') body.leftAt = new Date();
     if (body.status === 'active') body.leftAt = undefined;
     Object.assign(student, body);
     if (req.body.admissionNumber && req.body.admissionNumber !== student.admissionNumber) student.admissionNumber = String(req.body.admissionNumber).trim();
     await student.save();
     if (classChanged && student.classId && student.status === 'active') await billNewStudent(student, req.user._id);
+    // A move to another level (not just another arm) takes that level's next number.
+    if ((classChanged || reactivated) && student.classId && student.status === 'active') await regNumbers.issue(req.companyId, [student._id]);
     emitSchool(io(req), req.companyId, 'students', { studentId: student._id });
     res.status(200).json({ success: true, data: student });
   } catch (err) {
@@ -475,6 +513,7 @@ exports.deleteStudent = async (req, res, next) => {
       FeeBill.deleteMany({ companyId: req.companyId, studentId: student._id }),
       require('../models/ResultScore').deleteMany({ companyId: req.companyId, studentId: student._id }),
       AttendanceRecord.updateMany({ companyId: req.companyId }, { $pull: { records: { studentId: student._id } } }),
+      require('../models/StudentEnrolment').deleteMany({ companyId: req.companyId, studentId: student._id }),
       student.deleteOne(),
     ]);
     emitSchool(io(req), req.companyId, 'students');
@@ -484,9 +523,12 @@ exports.deleteStudent = async (req, res, next) => {
 
 // POST /school/students/promote — end of session. Moves a class's students
 // (or the chosen ones) up to another class, or graduates them.
+// `newSessionStarted`: the school already switched to the new session, so the
+// numbers issued at the switch (in the old class level) are replaced now.
+// Otherwise numbers come when the session is switched.
 exports.promoteStudents = async (req, res, next) => {
   try {
-    const { fromClassId, toClassId, graduate } = req.body;
+    const { fromClassId, toClassId, graduate, newSessionStarted } = req.body;
     await assertClass(req.companyId, fromClassId);
     if (!fromClassId) return next(new AppError('Choose the class to promote from.', 400));
     if (!graduate) {
@@ -499,9 +541,50 @@ exports.promoteStudents = async (req, res, next) => {
       filter._id = { $in: req.body.studentIds.filter((id) => mongoose.isValidObjectId(id)) };
     }
     const update = graduate ? { status: 'graduated', leftAt: new Date() } : { classId: toClassId };
-    const result = await Student.updateMany(filter, { $set: update });
+    const movedIds = await Student.find(filter).distinct('_id');
+    const result = await Student.updateMany({ ...filter, _id: { $in: movedIds } }, { $set: update });
+    if (newSessionStarted && movedIds.length) {
+      const settings = await getSettings(req.companyId);
+      const classes = await SchoolClass.find({ companyId: req.companyId, _id: { $in: [fromClassId, toClassId].filter(Boolean) } }).select('name levelCode').lean();
+      const levelOf = (id) => regNumbers.levelCodeOf(classes.find((c) => String(c._id) === String(id)));
+      if (graduate) {
+        await require('../models/StudentEnrolment').deleteMany({ companyId: req.companyId, session: settings.currentSession, studentId: { $in: movedIds } });
+        await Student.updateMany({ _id: { $in: movedIds } }, { $unset: { regNumber: 1, regSession: 1 } });
+      }
+      await regNumbers.renumberLevel(req.companyId, levelOf(fromClassId));
+      if (!graduate && levelOf(toClassId) !== levelOf(fromClassId)) await regNumbers.renumberLevel(req.companyId, levelOf(toClassId));
+    }
     emitSchool(io(req), req.companyId, 'students');
     res.status(200).json({ success: true, data: { moved: result.modifiedCount } });
+  } catch (err) { next(err); }
+};
+
+// ── Class register numbers ───────────────────────────────────────────────
+// GET /school/reg-numbers?session — per-level counts for the settings page.
+exports.getRegNumbers = async (req, res, next) => {
+  try {
+    res.status(200).json({ success: true, data: await regNumbers.summary(req.companyId, req.query.session) });
+  } catch (err) { next(err); }
+};
+
+// POST /school/reg-numbers/issue — numbers for everyone still without one.
+exports.issueRegNumbers = async (req, res, next) => {
+  try {
+    const issued = await regNumbers.issueMissing(req.companyId);
+    emitSchool(io(req), req.companyId, 'students');
+    res.status(200).json({ success: true, data: { issued } });
+  } catch (err) { next(err); }
+};
+
+// POST /school/reg-numbers/renumber { levelCode } — rebuild a level from 001
+// so its numbers match its population again (closes gaps left by moves).
+exports.renumberRegNumbers = async (req, res, next) => {
+  try {
+    const levelCode = String(req.body.levelCode || '').toUpperCase().trim();
+    if (!levelCode) return next(new AppError('Choose a class level.', 400));
+    const result = await regNumbers.renumberLevel(req.companyId, levelCode);
+    emitSchool(io(req), req.companyId, 'students');
+    res.status(200).json({ success: true, data: result });
   } catch (err) { next(err); }
 };
 

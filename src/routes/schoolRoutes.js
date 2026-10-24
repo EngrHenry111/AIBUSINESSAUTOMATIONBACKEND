@@ -62,6 +62,11 @@ router.post('/students', ADMIN, school.createStudent);
 router.post('/students/bulk', ADMIN, school.bulkCreateStudents);
 router.post('/students/promote', isManager, school.promoteStudents);
 router.get('/students/:id', school.getStudent);
+
+// Class register numbers (per level, per session)
+router.get('/reg-numbers', ADMIN, school.getRegNumbers);
+router.post('/reg-numbers/issue', ADMIN, school.issueRegNumbers);
+router.post('/reg-numbers/renumber', isManager, school.renumberRegNumbers);
 router.put('/students/:id', FINANCE, school.updateStudent);
 router.delete('/students/:id', isManager, school.deleteStudent);
 

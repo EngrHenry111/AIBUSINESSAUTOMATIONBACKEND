@@ -30,7 +30,7 @@ async function findClass(req, id) {
 }
 
 const classStudents = (companyId, classId) => Student.find({ companyId, classId, status: 'active' })
-  .sort({ lastName: 1, firstName: 1 }).select('firstName lastName otherNames admissionNumber gender').lean();
+  .sort({ lastName: 1, firstName: 1 }).select('firstName lastName otherNames admissionNumber regNumber gender').lean();
 
 async function periodFrom(req, source = req.query) {
   const settings = await getSettings(req.companyId);
@@ -121,7 +121,7 @@ exports.getAttendanceReport = async (req, res, next) => {
           const c = by.get(String(s._id)) || {};
           const attended = (c.present || 0) + (c.late || 0);
           const marked = attended + (c.absent || 0) + (c.excused || 0);
-          return { _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber, present: c.present || 0, late: c.late || 0, absent: c.absent || 0, excused: c.excused || 0, rate: marked ? Math.round((attended / marked) * 100) : null };
+          return { _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber, regNumber: s.regNumber, present: c.present || 0, late: c.late || 0, absent: c.absent || 0, excused: c.excused || 0, rate: marked ? Math.round((attended / marked) * 100) : null };
         }),
       },
     });
@@ -149,7 +149,7 @@ exports.getScoreSheet = async (req, res, next) => {
         caMax: settings.caMax, examMax: 100 - settings.caMax,
         students: students.map((s) => {
           const sc = map.get(String(s._id));
-          return { _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber, ca: sc?.ca ?? null, exam: sc?.exam ?? null, total: sc?.total ?? null, grade: sc?.grade || null };
+          return { _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber, regNumber: s.regNumber, ca: sc?.ca ?? null, exam: sc?.exam ?? null, total: sc?.total ?? null, grade: sc?.grade || null };
         }),
       },
     });
@@ -241,7 +241,7 @@ exports.getBroadsheet = async (req, res, next) => {
         rows: students.map((s) => {
           const r = rankMap.get(String(s._id));
           return {
-            _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber,
+            _id: s._id, name: nameOf(s), admissionNumber: s.admissionNumber, regNumber: s.regNumber,
             scores: Object.fromEntries((r?.scores || []).map((x) => [x.subject, x.total])),
             total: r?.total ?? null, average: r?.average ?? null,
             position: r ? ordinal(r.position) : null,
@@ -264,7 +264,7 @@ async function buildReportCard(companyId, studentId, session, term, settings) {
   const anyScore = await ResultScore.findOne({ companyId, studentId: student._id, session, term }).select('classId').lean();
   const classId = anyScore?.classId || student.classId?._id;
   if (!classId) throw new AppError('This student has no class or results for that term.', 400);
-  const [cls, { ranked, subjectStats }, attendance, remark] = await Promise.all([
+  const [cls, { ranked, subjectStats }, attendance, remark, regNumber] = await Promise.all([
     SchoolClass.findById(classId).select('name').populate('classTeacher', 'name').lean(),
     classRanking(companyId, classId, session, term),
     AttendanceRecord.aggregate([
@@ -273,12 +273,14 @@ async function buildReportCard(companyId, studentId, session, term, settings) {
       { $group: { _id: '$records.status', count: { $sum: 1 } } },
     ]),
     ReportCardRemark.findOne({ companyId, studentId: student._id, session, term }).lean(),
+    require('../utils/schoolRegNumbers').regNumberFor(companyId, student._id, session),
   ]);
   const mine = ranked.find((r) => r.studentId === String(student._id));
   const att = Object.fromEntries(attendance.map((a) => [a._id, a.count]));
   return {
     school: pick(settings.toObject(), ['schoolName', 'motto', 'address', 'phone', 'email', 'logo']),
-    student: { _id: student._id, name: nameOf(student), admissionNumber: student.admissionNumber, gender: student.gender, dateOfBirth: student.dateOfBirth },
+    // The number held in the report's own session, not today's.
+    student: { _id: student._id, name: nameOf(student), admissionNumber: student.admissionNumber, regNumber: regNumber || null, gender: student.gender, dateOfBirth: student.dateOfBirth },
     class: { _id: classId, name: cls?.name, teacher: cls?.classTeacher?.name },
     session, term, caMax: settings.caMax, gradingScale: settings.gradingScale,
     nextTermBegins: settings.nextTermBegins,

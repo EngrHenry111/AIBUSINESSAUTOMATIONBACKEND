@@ -162,7 +162,7 @@ exports.generateBills = async (req, res, next) => {
 // ── Bills ────────────────────────────────────────────────────────────────
 async function studentIdsMatching(companyId, search) {
   const re = new RegExp(escapeRe(String(search).trim()), 'i');
-  return Student.find({ companyId, $or: [{ firstName: re }, { lastName: re }, { admissionNumber: re }] }).limit(500).distinct('_id');
+  return Student.find({ companyId, $or: [{ firstName: re }, { lastName: re }, { admissionNumber: re }, { regNumber: re }] }).limit(500).distinct('_id');
 }
 
 exports.getBills = async (req, res, next) => {
@@ -184,7 +184,7 @@ exports.getBills = async (req, res, next) => {
     }
     const [bills, total, totals] = await Promise.all([
       FeeBill.find(filter).sort({ balance: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit)
-        .populate('studentId', 'firstName lastName admissionNumber guardian.phone').populate('classId', 'name').lean(),
+        .populate('studentId', 'firstName lastName admissionNumber regNumber guardian.phone').populate('classId', 'name').lean(),
       FeeBill.countDocuments(filter),
       FeeBill.aggregate([
         { $match: { ...filter, companyId: oid(req.companyId), ...(filter.classId && { classId: oid(filter.classId) }), ...(filter.studentId && { studentId: oid(filter.studentId) }), ...(filter.feeStructureId && { feeStructureId: oid(filter.feeStructureId) }) } },
@@ -304,7 +304,7 @@ exports.getDebtors = async (req, res, next) => {
       { $lookup: { from: 'schoolclasses', localField: 'student.classId', foreignField: '_id', as: 'class' } },
       { $project: {
         balance: 1, total: 1, paid: 1, bills: 1, oldestDue: 1, lastReminded: 1,
-        student: { _id: '$student._id', firstName: '$student.firstName', lastName: '$student.lastName', admissionNumber: '$student.admissionNumber', status: '$student.status', guardian: '$student.guardian' },
+        student: { _id: '$student._id', firstName: '$student.firstName', lastName: '$student.lastName', admissionNumber: '$student.admissionNumber', regNumber: '$student.regNumber', status: '$student.status', guardian: '$student.guardian' },
         className: { $first: '$class.name' },
       } },
     ]);
@@ -359,7 +359,7 @@ exports.getPayments = async (req, res, next) => {
     if (sumFilter.studentId) sumFilter.studentId = oid(sumFilter.studentId);
     const [payments, total, sum] = await Promise.all([
       FeePayment.find(filter).sort({ paidAt: -1 }).skip((page - 1) * limit).limit(limit)
-        .populate('studentId', 'firstName lastName admissionNumber').populate('billId', 'billNumber title session term').populate('recordedBy', 'name').lean(),
+        .populate('studentId', 'firstName lastName admissionNumber regNumber').populate('billId', 'billNumber title session term').populate('recordedBy', 'name').lean(),
       FeePayment.countDocuments(filter),
       FeePayment.aggregate([{ $match: sumFilter }, { $group: { _id: null, amount: { $sum: '$amount' }, count: { $sum: 1 } } }]),
     ]);
@@ -410,7 +410,7 @@ exports.getPayment = async (req, res, next) => {
   try {
     const payment = await findOwned(FeePayment, req, req.params.id, 'Payment');
     await payment.populate([
-      { path: 'studentId', select: 'firstName lastName otherNames admissionNumber classId guardian', populate: { path: 'classId', select: 'name' } },
+      { path: 'studentId', select: 'firstName lastName otherNames admissionNumber regNumber classId guardian', populate: { path: 'classId', select: 'name' } },
       { path: 'billId' },
       { path: 'recordedBy', select: 'name' },
     ]);
@@ -445,19 +445,17 @@ exports.voidPayment = async (req, res, next) => {
 // ── Public: parents pay fees online ──────────────────────────────────────
 const digits = (s) => String(s || '').replace(/\D/g, '');
 
-// A parent proves who they are with the admission number plus the phone
-// number or email the school has on file for the guardian.
+// A parent proves who they are with the admission number (or this session's
+// class reg number) plus the phone number or email the school has on file.
 async function findStudentForParent(companyId, admissionNumber, contact) {
   const adm = String(admissionNumber || '').trim();
   const c = String(contact || '').trim().toLowerCase();
   if (!adm || !c) throw new AppError('Enter the admission number and the parent\'s phone number or email.', 400);
-  const student = await Student.findOne({ companyId, admissionNumber: new RegExp(`^${escapeRe(adm)}$`, 'i') }).populate('classId', 'name').lean();
+  const exact = new RegExp(`^${escapeRe(adm)}$`, 'i');
+  const candidates = await Student.find({ companyId, $or: [{ admissionNumber: exact }, { regNumber: exact }] }).limit(2).populate('classId', 'name').lean();
   const phoneOk = (a, b) => a.length >= 10 && b.length >= 10 && a.slice(-10) === b.slice(-10);
-  const ok = student && (
-    (student.guardian?.email && student.guardian.email === c)
-    || phoneOk(digits(student.guardian?.phone), digits(c))
-  );
-  if (!ok) throw new AppError('We could not match those details. Check the admission number and the phone/email registered with the school.', 404);
+  const student = candidates.find((s) => (s.guardian?.email && s.guardian.email === c) || phoneOk(digits(s.guardian?.phone), digits(c)));
+  if (!student) throw new AppError('We could not match those details. Check the admission number and the phone/email registered with the school.', 404);
   return student;
 }
 
@@ -470,7 +468,7 @@ async function parentView(companyId, student) {
   ]);
   const bankAccount = await require('../models/VirtualAccount').findOne({ companyId, ownerType: 'student', ownerId: student._id }).select('accountNumber accountName bankName -_id').lean();
   return {
-    student: { name: [student.lastName, student.firstName, student.otherNames].filter(Boolean).join(' '), admissionNumber: student.admissionNumber, className: student.classId?.name || null },
+    student: { name: [student.lastName, student.firstName, student.otherNames].filter(Boolean).join(' '), admissionNumber: student.admissionNumber, regNumber: student.regNumber || null, className: student.classId?.name || null },
     bankAccount,
     bills, payments,
     outstanding: round2(bills.reduce((s, b) => s + Math.max(0, b.balance), 0)),

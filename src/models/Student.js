@@ -14,6 +14,10 @@ const guardianSchema = new mongoose.Schema({
 const studentSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   admissionNumber: { type: String, required: true, trim: true },
+  // This session's class register number, copied from StudentEnrolment for
+  // lists and search. Cleared when a new session starts until one is issued.
+  regNumber: { type: String, trim: true },
+  regSession: { type: String, trim: true },
   firstName: { type: String, required: true, trim: true, maxlength: 100 },
   lastName: { type: String, required: true, trim: true, maxlength: 100 },
   otherNames: { type: String, trim: true, maxlength: 100 },
@@ -42,6 +46,7 @@ studentSchema.set('toObject', { virtuals: true });
 
 studentSchema.index({ companyId: 1, admissionNumber: 1 }, { unique: true });
 studentSchema.index({ companyId: 1, classId: 1, status: 1, lastName: 1 });
+studentSchema.index({ companyId: 1, regNumber: 1 });
 studentSchema.index({ companyId: 1, 'guardian.email': 1 });
 studentSchema.index({ companyId: 1, 'guardian.phone': 1 });
 
