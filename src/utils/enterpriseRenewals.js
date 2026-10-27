@@ -1,8 +1,10 @@
 'use strict';
 
-// Enterprise is paid period by period (Paystack one-off checkout, priced by
-// branch count), so nothing renews by itself. Remind the owner 7 days and
-// 1 day before the paid period ends, with the price for their branches now.
+// Plans that don't renew by themselves — Enterprise (a one-off Paystack
+// checkout priced by branch count) and any plan paid by bank transfer — get
+// a reminder 7 days and 1 day before the paid period ends, with the price
+// to renew. Card subscriptions renew automatically and are skipped, and so
+// is anyone who cancelled.
 const Company = require('../models/Company');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
@@ -14,12 +16,23 @@ const DAY = 24 * 60 * 60 * 1000;
 const APP_URL = (process.env.CLIENT_URL || 'http://localhost:5174').split(',')[0].replace(/\/$/, '');
 const naira = (n) => `₦${Math.round(Number(n) || 0).toLocaleString()}`;
 
+async function priceFor(c) {
+  const cycle = c.subscription.billingCycle === 'annual' ? 'annual' : 'monthly';
+  if (c.subscription.plan === 'enterprise') {
+    const branches = await Branch.countDocuments({ companyId: c._id, status: 'active' });
+    const q = enterpriseQuote(branches);
+    return { cycle, price: cycle === 'annual' ? q.annual : q.monthly, detail: ` for <strong>${branches} branch${branches === 1 ? '' : 'es'}</strong>` };
+  }
+  const plan = require('../controllers/paymentController').PLANS[c.subscription.plan];
+  return { cycle, price: cycle === 'annual' ? plan?.annualAmount : plan?.monthlyAmount, detail: '' };
+}
+
 async function runEnterpriseRenewalReminders() {
   try {
     const now = Date.now();
     const companies = await Company.find({
-      'subscription.plan': 'enterprise',
       'subscription.status': 'active',
+      $or: [{ 'subscription.plan': 'enterprise' }, { 'subscription.paymentMethod': 'transfer', 'subscription.plan': { $ne: 'trial' } }],
       'subscription.currentPeriodEnd': { $gt: new Date(now), $lt: new Date(now + 7 * DAY + DAY) },
     }).select('companyName owner subscription');
 
@@ -36,30 +49,30 @@ async function runEnterpriseRenewalReminders() {
       if (!claimed.modifiedCount) continue;
 
       // eslint-disable-next-line no-await-in-loop
-      const [owner, branches] = await Promise.all([
-        User.findById(c.owner).select('name email'),
-        Branch.countDocuments({ companyId: c._id, status: 'active' }),
-      ]);
+      const [owner, { cycle, price, detail }] = await Promise.all([User.findById(c.owner).select('name email'), priceFor(c)]);
       if (!owner?.email) continue;
-      const q = enterpriseQuote(branches);
-      const cycle = c.subscription.billingCycle === 'annual' ? 'annual' : 'monthly';
-      const price = cycle === 'annual' ? q.annual : q.monthly;
+      const enterprise = c.subscription.plan === 'enterprise';
+      const planName = enterprise ? 'Enterprise' : c.subscription.plan.charAt(0).toUpperCase() + c.subscription.plan.slice(1);
       const when = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      const soon = daysLeft <= 1 ? 'tomorrow' : `in ${daysLeft} days`;
       const html = `<div style="font-family:Arial,sans-serif;max-width:560px;line-height:1.6;color:#0f172a">
-        <h2 style="margin:0 0 8px">Your Enterprise plan ends ${daysLeft <= 1 ? 'tomorrow' : `in ${daysLeft} days`}</h2>
-        <p>Hi ${owner.name || 'there'}, ${c.companyName}'s Enterprise plan is paid up to <strong>${when}</strong>.</p>
-        <p>Renewing for <strong>${branches} branch${branches === 1 ? '' : 'es'}</strong> costs <strong>${naira(price)}</strong> (${cycle}).
-        Renewing early adds the new period on top of the days you have left.</p>
-        <p>If it isn't renewed, Group Operations (branches, shift reports, approvals, inventory, credit and profit) locks 7 days after it ends. Your data is kept.</p>
-        <p style="text-align:center;margin:24px 0"><a href="${APP_URL}/billing" style="background:#10b981;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Renew Enterprise</a></p>
+        <h2 style="margin:0 0 8px">Your ${planName} plan ends ${soon}</h2>
+        <p>Hi ${owner.name || 'there'}, ${c.companyName}'s ${planName} plan is paid up to <strong>${when}</strong>.</p>
+        <p>Renewing${detail} costs <strong>${naira(price)}</strong> (${cycle}). You can pay by bank transfer, USSD or card.
+        Paying early adds the new period on top of the days you have left.</p>
+        <p>${enterprise
+          ? 'If it isn\'t renewed, Group Operations (branches, shift reports, approvals, inventory, credit and profit) locks 7 days after it ends.'
+          : 'If it isn\'t renewed, your account locks 7 days after it ends.'} Your data is kept.</p>
+        <p style="text-align:center;margin:24px 0"><a href="${APP_URL}/billing" style="background:#10b981;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Renew ${planName}</a></p>
+        <p style="color:#64748b;font-size:13px">Don't want to continue? Cancel from Billing and these reminders stop.</p>
       </div>`;
       // eslint-disable-next-line no-await-in-loop
-      await emailService.sendEmail({ to: owner.email, subject: `Your Enterprise plan ends ${daysLeft <= 1 ? 'tomorrow' : `in ${daysLeft} days`}`, html })
-        .catch((e) => logger.warn(`Enterprise renewal email failed for ${c._id}: ${e.message}`));
-      logger.info(`Enterprise renewal reminder (${stage}d) sent to ${c.companyName}`);
+      await emailService.sendEmail({ to: owner.email, subject: `Your ${planName} plan ends ${soon}`, html })
+        .catch((e) => logger.warn(`Renewal email failed for ${c._id}: ${e.message}`));
+      logger.info(`Renewal reminder (${stage}d) sent to ${c.companyName}`);
     }
   } catch (err) {
-    logger.error(`Enterprise renewal reminders failed: ${err.message}`);
+    logger.error(`Renewal reminders failed: ${err.message}`);
   }
 }
 

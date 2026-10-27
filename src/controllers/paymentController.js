@@ -144,6 +144,9 @@ exports.initializePayment = async (req, res, next) => {
   try {
     const { plan, billingCycle = 'monthly' } = req.body;
     if (!PLANS[plan]) return next(new AppError('Invalid plan selected.', 400));
+    // "transfer": pay this one period by bank transfer/USSD instead of a
+    // saved card. Nothing renews by itself; we send reminders instead.
+    const byTransfer = req.body.method === 'transfer';
 
     const company = await Company.findById(req.companyId);
     if (!company) return next(new AppError('Company not found.', 404));
@@ -167,6 +170,7 @@ exports.initializePayment = async (req, res, next) => {
       billingCycle,
       companyName: company.companyName,
       ...(branches !== undefined ? { branches } : {}),
+      ...(byTransfer ? { method: 'transfer' } : {}),
     };
 
     const response = await paystackAPI('POST', '/transaction/initialize', {
@@ -175,7 +179,7 @@ exports.initializePayment = async (req, res, next) => {
       currency: 'NGN',
       metadata,
       callback_url: `${process.env.CLIENT_URL?.split(',')[0]}/billing?payment=success`,
-      channels: ['card', 'bank', 'ussd', 'bank_transfer'],
+      channels: byTransfer ? ['bank_transfer', 'ussd', 'bank'] : ['card', 'bank', 'ussd', 'bank_transfer'],
     });
 
     if (!response.status) throw new AppError('Payment initialization failed.', 500);
@@ -213,7 +217,7 @@ exports.verifyPayment = async (req, res, next) => {
     if (String(companyId) !== String(req.companyId) && req.user.role !== 'super_admin') {
       return next(new AppError('This payment belongs to a different account.', 403));
     }
-    await upgradePlan(companyId, plan, billingCycle, reference, amount / 100, { branches: metadata.branches });
+    await upgradePlan(companyId, plan, billingCycle, reference, amount / 100, { branches: metadata.branches, method: methodFrom(metadata) });
 
     res.status(200).json({
       success: true,
@@ -269,6 +273,39 @@ async function ownerEmail(company) {
   const owner = await User.findById(company.owner).select('name email');
   return owner ? { name: owner.name, email: owner.email } : null;
 }
+
+// How a plan payment was made: a card subscription renews itself, a
+// transfer (or one-off) payment doesn't.
+function methodFrom(metadata = {}) {
+  if (metadata.subscription) return 'card';
+  if (metadata.method === 'transfer') return 'transfer';
+  return undefined;
+}
+
+// Stops Paystack charging the saved card again. The local status is the
+// caller's business. Returns false if Paystack couldn't be reached.
+async function stopCardRenewal(company) {
+  const code = company.subscription?.paystackSubscriptionCode;
+  if (!code || !PAYSTACK_SECRET) return true;
+  try {
+    let token = company.subscription.paystackEmailToken;
+    if (!token) {
+      const info = await paystackAPI('GET', `/subscription/${code}`);
+      token = info.data?.email_token;
+      if (token) company.subscription.paystackEmailToken = token;
+    }
+    if (token) await paystackAPI('POST', '/subscription/disable', { code, token });
+    return true;
+  } catch (err) {
+    logger.warn(`Paystack disable failed for ${code}: ${err.response?.data?.message || err.message}`);
+    return false;
+  }
+}
+
+const periodLeft = (company) => {
+  const end = company.subscription?.currentPeriodEnd;
+  return Boolean(end && new Date(end) > new Date());
+};
 
 // ── POST /payments/subscribe — start a recurring subscription ────────────
 exports.createSubscription = async (req, res, next) => {
@@ -352,9 +389,13 @@ exports.getSubscriptionDetails = async (req, res, next) => {
       status: sub.status || 'active',
       billingCycle: sub.billingCycle || 'monthly',
       currentPeriodEnd: sub.currentPeriodEnd || null,
+      paymentMethod: sub.paymentMethod || (sub.paystackSubscriptionCode ? 'card' : null),
+      cancelledAt: sub.cancelledAt || null,
+      // Cancelled but still inside a paid period: can switch renewal back on.
+      canResume: sub.status === 'cancelled' && periodLeft(company),
     };
 
-    if (!sub.paystackSubscriptionCode || !PAYSTACK_SECRET) {
+    if (!sub.paystackSubscriptionCode || !PAYSTACK_SECRET || base.paymentMethod === 'transfer') {
       return res.status(200).json({ success: true, data: base });
     }
 
@@ -366,7 +407,8 @@ exports.getSubscriptionDetails = async (req, res, next) => {
         success: true,
         data: {
           ...base,
-          status: d.status || base.status,
+          // Paystack says "non-renewing" after a cancel; ours is the truth.
+          paystackStatus: d.status || null,
           nextPaymentDate: d.next_payment_date || null,
           amount: d.amount ? d.amount / 100 : (base.billingCycle === 'annual'
             ? PLANS[base.plan]?.annualAmount : PLANS[base.plan]?.monthlyAmount) || null,
@@ -449,7 +491,7 @@ exports.webhook = async (req, res) => {
             logger.error(`School fee webhook credit failed for ${reference}: ${e.stack || e.message}`);
           }
         } else if (metadata?.companyId && metadata?.plan) {
-          await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100, { branches: metadata.branches });
+          await upgradePlan(metadata.companyId, metadata.plan, metadata.billingCycle || 'monthly', reference, amount / 100, { branches: metadata.branches, method: methodFrom(metadata) });
         }
         break;
       }
@@ -466,6 +508,8 @@ exports.webhook = async (req, res) => {
           if (mapped.plan) company.subscription.plan = mapped.plan;
           if (mapped.billingCycle) company.subscription.billingCycle = mapped.billingCycle;
           company.subscription.status = 'active';
+          company.subscription.paymentMethod = 'card';
+          company.subscription.cancelledAt = undefined;
           await company.save();
           logger.info(`Subscription ${data.subscription_code} linked to company ${company._id}`);
         }
@@ -487,14 +531,22 @@ exports.webhook = async (req, res) => {
         break;
       }
 
-      // Subscription disabled — company loses access
+      // Card renewal switched off: the owner cancelled, moved to paying by
+      // transfer, or Paystack gave up on the card. Days already paid for are
+      // kept; access lapses at the period end like any cancellation.
       case 'subscription.disable': {
         const company = await companyForWebhook(data);
-        if (company) {
-          company.subscription.status = 'expired';
-          await company.save();
-          logger.warn(`Subscription disabled for company ${company._id}`);
+        if (!company) break;
+        const sub = company.subscription;
+        if (data.subscription_code && sub.paystackSubscriptionCode && data.subscription_code !== sub.paystackSubscriptionCode) break; // an old subscription
+        if (sub.paymentMethod === 'transfer') break; // they now pay by transfer
+        if (periodLeft(company)) {
+          if (sub.status === 'active') { sub.status = 'cancelled'; sub.cancelledAt = sub.cancelledAt || new Date(); }
+        } else {
+          sub.status = 'expired';
         }
+        await company.save();
+        logger.warn(`Subscription disabled for company ${company._id} -> ${sub.status}`);
         break;
       }
 
@@ -515,7 +567,7 @@ exports.webhook = async (req, res) => {
         break;
       }
 
-      // Recurring charge succeeded — extend the period by 30 days
+      // Recurring charge succeeded — extend the period by one billing cycle
       case 'invoice.update':
       case 'invoice.payment_success': {
         const paidOk = data.status === 'success' || data.paid === true || event === 'invoice.payment_success';
@@ -526,9 +578,11 @@ exports.webhook = async (req, res) => {
             ? new Date(company.subscription.currentPeriodEnd)
             : new Date();
           const extended = new Date(from);
-          extended.setDate(extended.getDate() + 30);
+          if (company.subscription.billingCycle === 'annual') extended.setFullYear(extended.getFullYear() + 1);
+          else extended.setMonth(extended.getMonth() + 1);
 
           company.subscription.status = 'active';
+          company.subscription.cancelledAt = undefined;
           company.subscription.currentPeriodStart = company.subscription.currentPeriodStart || new Date();
           company.subscription.currentPeriodEnd = extended;
           await company.save();
@@ -587,32 +641,20 @@ exports.getHistory = async (req, res, next) => {
 };
 
 // ── POST /cancel-subscription (and /cancel) ─────────────────────────────
+// Card payers: the card stops being charged. Transfer payers: the renewal
+// reminders stop. Either way the plan stays usable until the paid period
+// ends, and can be resumed until then.
 exports.cancelSubscription = async (req, res, next) => {
   try {
     const company = await Company.findById(req.companyId);
     if (!company) return next(new AppError('Company not found.', 404));
+    if (company.subscription.plan === 'trial') return next(new AppError('You are on the free trial, so there is nothing to cancel.', 400));
+    if (company.subscription.status === 'cancelled') return next(new AppError('Your subscription is already cancelled.', 400));
 
-    const code = company.subscription?.paystackSubscriptionCode;
-    if (code && PAYSTACK_SECRET) {
-      try {
-        let token = company.subscription.paystackEmailToken;
-        if (!token) {
-          const info = await paystackAPI('GET', `/subscription/${code}`);
-          token = info.data?.email_token;
-          if (token) {
-            company.subscription.paystackEmailToken = token;
-          }
-        }
-        if (token) {
-          await paystackAPI('POST', '/subscription/disable', { code, token });
-        }
-      } catch (err) {
-        logger.warn(`Paystack disable failed for ${code}: ${err.response?.data?.message || err.message}`);
-        // fall through — we still mark it cancelled locally
-      }
-    }
+    if (company.subscription.paymentMethod !== 'transfer') await stopCardRenewal(company);
 
     company.subscription.status = 'cancelled';
+    company.subscription.cancelledAt = new Date();
     await company.save();
 
     await writeAuditLog({
@@ -630,6 +672,38 @@ exports.cancelSubscription = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── POST /payments/resume — undo a cancel while paid time is left ────────
+// No charge now: a card subscription picks up again at its next payment
+// date; a transfer payer just gets their reminders back. Once the period
+// has ended there is nothing to resume: they pay for a new period instead.
+exports.resumeSubscription = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.companyId);
+    if (!company) return next(new AppError('Company not found.', 404));
+    const sub = company.subscription;
+    if (sub.status !== 'cancelled') return next(new AppError('Your subscription is not cancelled.', 400));
+    if (!periodLeft(company)) return next(new AppError('Your plan has ended. Choose a plan below to subscribe again.', 400));
+
+    if (sub.paymentMethod !== 'transfer' && sub.paystackSubscriptionCode && PAYSTACK_SECRET) {
+      let token = sub.paystackEmailToken;
+      if (!token) token = (await paystackAPI('GET', `/subscription/${sub.paystackSubscriptionCode}`)).data?.email_token;
+      if (!token) return next(new AppError('Could not restart card renewal. Subscribe again from the plans below.', 400));
+      await paystackAPI('POST', '/subscription/enable', { code: sub.paystackSubscriptionCode, token });
+      sub.paystackEmailToken = token;
+    }
+    sub.status = 'active';
+    sub.cancelledAt = undefined;
+    sub.renewalReminderFor = undefined;
+    await company.save();
+
+    await writeAuditLog({
+      companyId: req.companyId, userId: req.user._id,
+      action: 'subscription.resume', description: `Resumed ${sub.plan} subscription`, ip: req.ip,
+    });
+    res.status(200).json({ success: true, message: 'Subscription resumed.', data: { currentPeriodEnd: sub.currentPeriodEnd } });
+  } catch (err) { next(err); }
+};
+
 // ── Internal: upgrade company plan ───────────────────────────────────────
 async function upgradePlan(companyId, plan, billingCycle, reference, amount, extra = {}) {
   const planConfig = PLANS[plan];
@@ -640,14 +714,14 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount, ext
   if (reference && await Payment.exists({ reference, status: 'success' })) return;
 
   const now = new Date();
-  // Enterprise renewals paid early extend the current period instead of
-  // throwing away the days already paid for.
+  // Paying again for the same plan before it ends (a transfer payer's next
+  // month, resubscribing after a cancel) adds the new period on top of the
+  // days already paid for instead of throwing them away.
   let start = now;
-  if (plan === 'enterprise') {
-    const current = await Company.findById(companyId).select('subscription');
-    const end = current?.subscription?.currentPeriodEnd;
-    if (current?.subscription?.plan === 'enterprise' && end && new Date(end) > now) start = new Date(end);
-  }
+  const current = await Company.findById(companyId);
+  const end = current?.subscription?.currentPeriodEnd;
+  if (current?.subscription?.plan === plan && end && new Date(end) > now
+    && current.subscription.status !== 'expired') start = new Date(end);
   const periodEnd = new Date(start);
   if (billingCycle === 'annual') {
     periodEnd.setFullYear(periodEnd.getFullYear() + 1);
@@ -663,6 +737,8 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount, ext
     'subscription.lastPaymentReference': reference,
     'subscription.lastPaymentAmount': amount,
     'subscription.billingCycle': billingCycle,
+    ...(extra.method ? { 'subscription.paymentMethod': extra.method } : {}),
+    $unset: { 'subscription.cancelledAt': 1, 'subscription.renewalReminderFor': 1 },
     ...(plan === 'enterprise' && extra.branches !== undefined ? { 'subscription.enterpriseBranches': Number(extra.branches) || 0 } : {}),
     'limits.maxUsers': planConfig.features.maxUsers,
     'limits.maxDocuments': planConfig.features.maxDocuments,
@@ -689,9 +765,17 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount, ext
     logger.error(`Failed to record payment ${reference}: ${err.message}`);
   }
 
+  // Moved to paying by transfer: stop the old card subscription so the card
+  // isn't charged as well.
+  if (extra.method === 'transfer' && current?.subscription?.paystackSubscriptionCode) {
+    await stopCardRenewal(current);
+  }
+
   logger.info(`✅ Plan upgraded: company ${companyId} → ${plan} (${billingCycle})`);
 }
 // ── GET /payments/enterprise-quote — price for this company's branch count ─
+exports.PLANS = PLANS;
+
 exports.enterpriseQuote = async (req, res, next) => {
   try {
     const company = await Company.findById(req.companyId).select('subscription');

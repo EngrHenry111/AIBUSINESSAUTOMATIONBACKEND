@@ -34,6 +34,10 @@ const companySchema = new mongoose.Schema({
     currentPeriodStart: Date,
     currentPeriodEnd: Date,
     billingCycle: { type: String, enum: ['monthly', 'annual'], default: 'monthly' },
+    // card: Paystack renews automatically. transfer: the owner pays each
+    // period themselves (bank transfer/USSD) and gets renewal reminders.
+    paymentMethod: { type: String, enum: ['card', 'transfer'] },
+    cancelledAt: Date, // stays usable until currentPeriodEnd, then lapses
     paystackCustomerId: String,
     paystackCustomerCode: String,
     paystackSubscriptionCode: String,

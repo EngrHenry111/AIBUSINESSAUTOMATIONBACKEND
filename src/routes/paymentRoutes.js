@@ -24,5 +24,6 @@ router.post('/subscribe', requireRole('company_owner', 'super_admin'), ctrl.crea
 router.get('/subscription', ctrl.getSubscriptionDetails);
 router.post('/cancel-subscription', requireRole('company_owner', 'super_admin'), ctrl.cancelSubscription);
 router.post('/cancel', requireRole('company_owner', 'super_admin'), ctrl.cancelSubscription);
+router.post('/resume', requireRole('company_owner', 'super_admin'), ctrl.resumeSubscription);
 
 module.exports = router;
