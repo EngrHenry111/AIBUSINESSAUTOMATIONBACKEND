@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const Lead = require('../models/Lead');
 const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
@@ -15,7 +16,7 @@ exports.globalSearch = async (req, res, next) => {
     }
 
     const query = q.trim();
-    const regex = { $regex: query, $options: 'i' };
+    const regex = { $regex: escapeRegex(query), $options: 'i' };
     const companyId = req.companyId;
     const limit = 5;
 

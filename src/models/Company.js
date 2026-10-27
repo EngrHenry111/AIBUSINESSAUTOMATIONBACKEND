@@ -286,6 +286,29 @@ companySchema.pre('save', async function (next) {
   }
 });
 
+// Whatever endpoint sends a company document, these never leave the
+// server: Paystack subscription credentials and the full payout account
+// number (shown masked; payment settings has its own masked view).
+companySchema.set('toJSON', {
+  transform(doc, ret) {
+    if (ret.subscription) {
+      for (const k of ['paystackEmailToken', 'paystackSubscriptionCode', 'paystackCustomerCode', 'paystackCustomerId', 'paystackPlanCode', 'stripeCustomerId', 'stripeSubscriptionId']) delete ret.subscription[k];
+    }
+    if (ret.paymentSettings) {
+      const acct = ret.paymentSettings.accountNumber;
+      if (acct) ret.paymentSettings.accountNumber = acct.length >= 4 ? `****${acct.slice(-4)}` : '****';
+      delete ret.paymentSettings.paystackSubaccountId;
+    }
+    if (ret.deliverySettings?.providers) {
+      for (const p of Object.values(ret.deliverySettings.providers)) {
+        if (p) { delete p.apiKey; delete p.secretKey; delete p.webhookSecret; }
+      }
+    }
+    delete ret.__v;
+    return ret;
+  },
+});
+
 companySchema.statics.slugify = slugify;
 companySchema.statics.generateStoreSlug = generateStoreSlug;
 

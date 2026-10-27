@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const os = require('os');
 const mongoose = require('mongoose');
 
@@ -137,7 +138,7 @@ exports.getCompanies = async (req, res, next) => {
     const filter = {};
     if (status) filter.status = status;
     if (plan) filter['subscription.plan'] = plan;
-    if (search && search.trim()) filter.companyName = { $regex: search.trim(), $options: 'i' };
+    if (search && search.trim()) filter.companyName = { $regex: escapeRegex(search.trim()), $options: 'i' };
 
     const [companies, total] = await Promise.all([
       Company.find(filter).populate('owner', 'name email')
@@ -248,7 +249,7 @@ exports.getUsers = async (req, res, next) => {
     if (role) filter.role = role;
     if (status) filter.status = status;
     if (search && search.trim()) {
-      const rx = { $regex: search.trim(), $options: 'i' };
+      const rx = { $regex: escapeRegex(search.trim()), $options: 'i' };
       filter.$or = [{ name: rx }, { email: rx }];
     }
 

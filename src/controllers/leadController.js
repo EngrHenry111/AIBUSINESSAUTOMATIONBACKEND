@@ -41,9 +41,9 @@ exports.getLeads = async (req, res, next) => {
     if (assignedTo) filter.assignedTo = assignedTo;
     if (source) filter.source = source;
     if (search) filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
-      { company: { $regex: search, $options: 'i' } },
+      { name: { $regex: escapeRegex(search), $options: 'i' } },
+      { email: { $regex: escapeRegex(search), $options: 'i' } },
+      { company: { $regex: escapeRegex(search), $options: 'i' } },
     ];
 
     const skip = (page - 1) * limit;

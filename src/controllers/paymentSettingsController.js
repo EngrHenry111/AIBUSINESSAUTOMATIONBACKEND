@@ -44,7 +44,6 @@ exports.getBanks = async (req, res, next) => {
       .map((b) => ({ name: b.name, code: b.code, slug: b.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    console.log('Banks from Paystack:', banks.slice(0, 3)); // sample — confirm `code` is numeric (e.g. "011"), not a name
     cache.set('paystack_banks_ngn', banks, 86400); // 24h
     res.status(200).json({ success: true, data: banks });
   } catch (err) { next(err); }
@@ -87,7 +86,6 @@ exports.verifyAccount = async (req, res, next) => {
 exports.createSubaccount = async (req, res, next) => {
   try {
     const { bankCode, accountNumber, businessName } = req.body;
-    console.log('createSubaccount received bankCode:', bankCode, '(expect a numeric Paystack code like "011", not a bank name)');
     if (!bankCode || !/^\d{10}$/.test(String(accountNumber || ''))) {
       return next(new AppError('Bank and a valid 10-digit account number are required.', 400));
     }
@@ -121,14 +119,6 @@ exports.createSubaccount = async (req, res, next) => {
       ...(company.profile?.phone ? { primary_contact_phone: company.profile.phone } : {}),
     };
 
-    console.log('Creating subaccount with:', {
-      business_name: bizName,
-      settlement_bank: bankCode,
-      account_number: accountNumber,
-      percentage_charge: PLATFORM_COMMISSION,
-      settlement_schedule: 'auto',
-      ...contactFields,
-    });
 
     let result;
     if (company.paymentSettings?.paystackSubaccountCode) {
@@ -153,7 +143,6 @@ exports.createSubaccount = async (req, res, next) => {
       });
     }
 
-    console.log('Paystack subaccount response:', JSON.stringify(result, null, 2));
 
     const sub = result.data || {};
     if (sub.active === false) {
@@ -233,7 +222,6 @@ exports.updateSubaccount = async (req, res, next) => {
     if (bankCode) payload.settlement_bank = bankCode;
     if (accountNumber) payload.account_number = accountNumber;
 
-    console.log('Updating subaccount with:', payload);
 
     let accountName = company.paymentSettings.accountName;
     if (bankCode && accountNumber) {
@@ -244,7 +232,6 @@ exports.updateSubaccount = async (req, res, next) => {
     let subaccountCode = company.paymentSettings.paystackSubaccountCode;
     try {
       const updateResult = await paystackAPI('PUT', `/subaccount/${subaccountCode}`, payload);
-      console.log('Paystack subaccount update response:', JSON.stringify(updateResult, null, 2));
     } catch (err) {
       // The stored code doesn't exist under the current secret key (e.g. it
       // was created in test mode and the server now runs live) — create a

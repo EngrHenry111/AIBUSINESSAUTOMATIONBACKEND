@@ -130,11 +130,12 @@ async function createInvitedUser({ companyId, name, email, role, inviter, compan
   });
 
   const setupLink = `${clientUrl()}/reset-password/${token}`;
-  logger.info(`Team member invited: ${email} — setup link logged in case email delivery fails: ${setupLink}`);
+  // The setup link sets the new member's password: local development only.
+  if (!require('../utils/generateTokens').isProd()) logger.info(`Team member invited: ${email} — setup link: ${setupLink}`);
   emailService.sendTeamInvite(email, name, inviter.name, companyName, setupLink, role).then(() => {
     logger.info(`✅ Invite email sent to ${email}`);
   }).catch((err) => {
-    logger.warn(`⚠️  Invite email failed (${err.message}) — setup link logged above, share it manually if needed`);
+    logger.warn(`⚠️  Invite email failed for ${email}: ${err.message}. Use Resend invite from Team.`);
   });
 
   return user;
@@ -247,7 +248,7 @@ exports.resendInvite = async (req, res, next) => {
     emailService.sendTeamInvite(member.email, member.name, req.user.name, company.companyName, setupLink, member.role, true).then(() => {
       logger.info(`✅ Invite reminder sent to ${member.email}`);
     }).catch((err) => {
-      logger.warn(`⚠️  Invite reminder failed (${err.message}) — setup link: ${setupLink}`);
+      logger.warn(`⚠️  Invite reminder failed for ${member.email}: ${err.message}`);
     });
 
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.invite', resource: 'User', resourceId: member._id, description: `Resent invite to ${member.email}`, ip: req.ip });

@@ -57,7 +57,9 @@ const optionalAuth = async (req, res, next) => {
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(decoded.id);
-      if (user && user.status === 'active') {
+      // Same checks as protect: a token from before a password change
+      // (stale tokenVersion) counts as signed out.
+      if (user && user.status === 'active' && (decoded.tokenVersion || 0) === (user.tokenVersion || 0)) {
         req.user = user;
         req.companyId = user.companyId;
       }

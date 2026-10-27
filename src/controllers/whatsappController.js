@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const WhatsAppConversation = require('../models/WhatsAppConversation');
 const wa = require('../services/whatsappService');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -73,7 +74,7 @@ exports.getConversations = async (req, res, next) => {
     else if (filter === 'human') q.status = 'human_takeover';
     else if (filter === 'resolved') q.status = 'resolved';
     if (search && search.trim()) {
-      const rx = { $regex: search.trim(), $options: 'i' };
+      const rx = { $regex: escapeRegex(search.trim()), $options: 'i' };
       q.$or = [{ customerName: rx }, { customerPhone: rx }];
     }
 

@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const LoyaltyProgram = require('../models/LoyaltyProgram');
 const CustomerPoints = require('../models/CustomerPoints');
 const { AppError } = require('../middleware/errorMiddleware');
@@ -60,8 +61,8 @@ exports.getCustomerPoints = async (req, res, next) => {
     if (tier) filter.tier = tier;
     if (minimumPoints) filter.currentPoints = { $gte: Number(minimumPoints) };
     if (search) filter.$or = [
-      { customerName: { $regex: search, $options: 'i' } },
-      { customerEmail: { $regex: search, $options: 'i' } },
+      { customerName: { $regex: escapeRegex(search), $options: 'i' } },
+      { customerEmail: { $regex: escapeRegex(search), $options: 'i' } },
     ];
 
     const skip = (Number(page) - 1) * Number(limit);

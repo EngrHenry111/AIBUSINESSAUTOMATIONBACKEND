@@ -449,7 +449,6 @@ exports.webhook = async (req, res) => {
     // these diagnostic lines are here specifically to be visible in
     // production while chasing the "orders don't appear" bug.
     console.log('Webhook received:', event);
-    console.log('Metadata:', JSON.stringify(data?.metadata));
 
     switch (event) {
       // First charge for a plan-based transaction, or any one-off charge

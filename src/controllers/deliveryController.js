@@ -324,12 +324,14 @@ async function handleWebhook(provider, req, res) {
 
     const company = await Company.findById(candidateShipment.companyId).select('+deliverySettings.providers.gig.webhookSecret +deliverySettings.providers.kwik.webhookSecret +deliverySettings.providers.sendbox.webhookSecret');
     const expectedSecret = company?.deliverySettings?.providers?.[provider]?.webhookSecret;
-    if (expectedSecret && req.query.secret !== expectedSecret) {
-      logger.warn(`${provider} webhook: bad secret for tracking number ${trackingNumberForAuth}`);
-      return res.status(200).json({ received: true }); // ack (never reveal validity to a prober) but do nothing
-    }
-    if (!expectedSecret) {
-      logger.warn(`${provider} webhook received with no webhookSecret configured for company ${candidateShipment.companyId} — accepting unauthenticated (set one up in Delivery Settings to close this).`);
+    // No secret configured, or the wrong one: acknowledge (never reveal
+    // validity to a prober) but change nothing. Reconnecting the provider in
+    // Delivery Settings issues a secret and a webhook URL that carries it.
+    const given = String(req.query.secret || '');
+    if (!expectedSecret || given.length !== expectedSecret.length
+      || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expectedSecret))) {
+      logger.warn(`${provider} webhook ignored for ${trackingNumberForAuth}: ${expectedSecret ? 'bad secret' : 'no secret configured'}`);
+      return res.status(200).json({ received: true });
     }
     const shipment = candidateShipment;
 

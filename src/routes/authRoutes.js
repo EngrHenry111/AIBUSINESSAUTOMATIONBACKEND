@@ -27,6 +27,11 @@ router.post('/login', authLimiter, [
 router.post('/logout', protect, ctrl.logout);
 router.post('/refresh-token', ctrl.refreshToken);
 router.get('/me', protect, ctrl.getMe);
+// Short-lived pass for the Socket.io connection, which can't see the cookie.
+router.get('/socket-token', protect, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, token: require('../utils/socketAuth').issueSocketToken(req.user) });
+});
 
 router.post('/forgot-password', authLimiter, [
   body('email').isEmail().withMessage('Valid email required'),

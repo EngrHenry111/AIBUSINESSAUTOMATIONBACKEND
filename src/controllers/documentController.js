@@ -1,5 +1,6 @@
 'use strict';
 
+const { writeAuditLog } = require('../utils/auditLog');
 const Document = require('../models/Document');
 const DocumentChunk = require('../models/DocumentChunk');
 const KnowledgeBase = require('../models/KnowledgeBase');
@@ -218,6 +219,25 @@ exports.getDocument = async (req, res, next) => {
     const chunks = await DocumentChunk.find({ documentId: req.params.id, companyId: req.companyId })
       .select('-embedding').sort({ chunkIndex: 1 });
     res.status(200).json({ success: true, data: { ...document.toJSON(), chunks } });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /documents/:id/customer-facing { customerFacing } ─────────────
+// Lets the website chat and WhatsApp bot answer customers from this file.
+exports.setCustomerFacing = async (req, res, next) => {
+  try {
+    const document = await Document.findOneAndUpdate(
+      { _id: req.params.id, companyId: req.companyId },
+      { customerFacing: req.body.customerFacing === true },
+      { new: true },
+    ).select('name customerFacing');
+    if (!document) return next(new AppError('Document not found.', 404));
+    await writeAuditLog({
+      companyId: req.companyId, userId: req.user._id,
+      action: 'document.customer_facing', resource: 'Document', resourceId: document._id,
+      description: `${document.name}: ${document.customerFacing ? 'customers can now see it' : 'internal only'}`, ip: req.ip,
+    });
+    res.status(200).json({ success: true, data: document });
   } catch (err) { next(err); }
 };
 

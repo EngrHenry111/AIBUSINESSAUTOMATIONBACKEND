@@ -2,6 +2,7 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
 const { enforceTenant } = require('../middleware/tenantMiddleware');
+const { isManager } = require('../middleware/roleMiddleware');
 const { uploadLimiter } = require('../middleware/rateLimitMiddleware');
 const { uploadDocument } = require('../config/cloudinary');
 const ctrl = require('../controllers/documentController');
@@ -16,6 +17,8 @@ router.get('/:id/status', ctrl.getDocumentStatus);
 // uploadDocument.single('file') parses the multipart form and puts file on req.file
 router.post('/upload', uploadLimiter, uploadDocument.single('file'), ctrl.uploadDocument);
 router.post('/:id/reembed', ctrl.reembed);
-router.delete('/:id', ctrl.deleteDocument);
+// Exposing a file to customers, or removing one, is a manager's call.
+router.patch('/:id/customer-facing', isManager, ctrl.setCustomerFacing);
+router.delete('/:id', isManager, ctrl.deleteDocument);
 
 module.exports = router;

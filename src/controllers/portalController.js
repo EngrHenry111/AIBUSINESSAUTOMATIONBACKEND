@@ -80,10 +80,8 @@ exports.requestAccess = async (req, res, next) => {
     // localhost link in production.
     const link = `${clientUrl()}/portal?token=${token}`;
 
-    logger.info(`Sending portal link to: ${email}`);
-    logger.info(`Company: ${companyId}`);
-    logger.info(`Token generated: ${token.substring(0, 8)}...`);
-    logger.info(`🔗 Portal access link for ${email}: ${link}`);
+    // The link signs the customer in, so it never goes into production logs.
+    if (!require('../utils/generateTokens').isProd()) logger.info(`🔗 Portal access link (local development only): ${link}`);
 
     // Not awaited — the request responds immediately either way. The result
     // is still logged (including the Resend message ID) so a "sent, but

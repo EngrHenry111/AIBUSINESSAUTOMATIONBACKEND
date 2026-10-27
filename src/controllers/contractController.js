@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const Contract = require('../models/Contract');
 const Company = require('../models/Company');
 const { runAgent } = require('../services/groqService');
@@ -185,9 +186,9 @@ exports.getContracts = async (req, res, next) => {
     if (status) filter.status = status;
     if (type) filter.type = type;
     if (search) filter.$or = [
-      { title: { $regex: search, $options: 'i' } },
-      { 'parties.party1.name': { $regex: search, $options: 'i' } },
-      { 'parties.party2.name': { $regex: search, $options: 'i' } },
+      { title: { $regex: escapeRegex(search), $options: 'i' } },
+      { 'parties.party1.name': { $regex: escapeRegex(search), $options: 'i' } },
+      { 'parties.party2.name': { $regex: escapeRegex(search), $options: 'i' } },
     ];
 
     const sortSpec = sort.startsWith('-') ? { [sort.slice(1)]: -1 } : { [sort]: 1 };

@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Company = require('../models/Company');
-const { generateAccessToken, generateRefreshToken, generateResetToken, setTokenCookies } = require('../utils/generateTokens');
+const { generateAccessToken, generateRefreshToken, generateResetToken, setTokenCookies, isProd } = require('../utils/generateTokens');
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const clientUrl = () => (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -16,7 +16,7 @@ async function issueVerification(user) {
   user.emailVerifyExpires = new Date(Date.now() + EMAIL_VERIFY_TTL_MS);
   await user.save({ validateBeforeSave: false });
   const link = `${clientUrl()}/verify-email?token=${token}`;
-  logger.info(`✉️  Email verification link for ${user.email}: ${link}`);
+  if (!isProd()) logger.info(`✉️  Email verification link for ${user.email}: ${link}`); // local development only
   emailService.sendVerificationEmail(user.email, user.name, link)
     .catch((err) => logger.warn(`Verification email failed for ${user.email}: ${err.message}`));
 }
@@ -200,15 +200,15 @@ exports.forgotPassword = async (req, res, next) => {
     user.passwordResetExpires = Date.now() + 10 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
-    // Always log the token so it works even when email is blocked
-    logger.info(`🔑 PASSWORD RESET TOKEN for ${email}: ${token}`);
-    logger.info(`🔗 Reset URL: ${process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5173'}/reset-password/${token}`);
+    // A reset link is a key to the account: it is never written to
+    // production logs, where anyone with log access could use it.
+    if (!isProd()) logger.info(`🔗 Reset URL (local development only): ${clientUrl()}/reset-password/${token}`);
 
     // Try to send email — but NEVER fail the request if email doesn't work
     emailService.sendPasswordReset(email, user.name, token).then(() => {
       logger.info(`✅ Reset email sent to ${email}`);
     }).catch(err => {
-      logger.warn(`⚠️  Reset email failed (${err.message}) — token logged above, user can still reset manually`);
+      logger.warn(`⚠️  Reset email failed for user ${user._id}: ${err.message}`);
     });
 
     // Always return success — email failure is logged, not returned to user

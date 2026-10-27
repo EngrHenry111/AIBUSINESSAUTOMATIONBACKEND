@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const fs = require('fs');
 const Procurement = require('../models/Procurement');
 const ProcurementBudget = require('../models/ProcurementBudget');
@@ -143,8 +144,8 @@ exports.getRequisitions = async (req, res, next) => {
     if (type) filter.type = type;
     if (department) filter.department = department;
     if (search) filter.$or = [
-      { referenceNumber: { $regex: search, $options: 'i' } },
-      { title: { $regex: search, $options: 'i' } },
+      { referenceNumber: { $regex: escapeRegex(search), $options: 'i' } },
+      { title: { $regex: escapeRegex(search), $options: 'i' } },
     ];
 
     const [requisitions, total] = await Promise.all([
@@ -543,7 +544,7 @@ exports.getVendors = async (req, res, next) => {
   try {
     const { search, prequalified, blacklisted } = req.query;
     const filter = { companyId: req.companyId };
-    if (search) filter.$or = [{ name: { $regex: search, $options: 'i' } }, { category: { $regex: search, $options: 'i' } }];
+    if (search) filter.$or = [{ name: { $regex: escapeRegex(search), $options: 'i' } }, { category: { $regex: escapeRegex(search), $options: 'i' } }];
     if (prequalified === 'true') filter.isPrequalified = true;
     if (blacklisted === 'true') filter.blacklisted = true;
 

@@ -165,60 +165,8 @@ async function bootstrap() {
     setInterval(reconcileStorefrontOrders, 15 * 60 * 1000);
     logger.info('✅ Storefront order reconciliation scheduled (runs every 15min)');
 
-    // Socket.io handlers
-    io.on('connection', (socket) => {
-      logger.debug(`Socket connected: ${socket.id}`);
-
-      // Join company room (for broadcasts)
-      socket.on('join_company', (companyId) => {
-        socket.join(`company:${companyId}`);
-      });
-
-      // Join personal room (for direct messages)
-      socket.on('join_user', (userId) => {
-        socket.join(`user:${userId}`);
-        socket.userId = userId;
-      });
-
-      // Join AI chat room
-      socket.on('join_chat', (chatId) => {
-        socket.join(`chat:${chatId}`);
-      });
-
-      // Public group-buy page — anonymous shoppers join this room to see
-      // live participant-count updates without needing any account.
-      socket.on('join_groupbuy', (groupBuyId) => {
-        if (groupBuyId) socket.join(`groupbuy:${groupBuyId}`);
-      });
-
-      // ── WhatsApp ──────────────────────────────────────────────────────
-      // Team members join their company room to receive:
-      //   whatsapp:qr                  — QR code ready to scan
-      //   whatsapp:status              — client connected / disconnected / error
-      //   whatsapp:handover_needed     — AI escalated a conversation to humans
-      //   whatsapp:new_message         — a new message on any conversation
-      //   whatsapp:conversation_claimed— a teammate took a conversation
-      //   whatsapp:conversation_updated— status changed (resolved / back to AI)
-      socket.on('whatsapp:join', (companyId) => {
-        if (companyId) socket.join(`company:${companyId}`);
-      });
-
-      // Typing indicators
-      socket.on('typing:start', ({ toUserId, fromUser }) => {
-        socket.to(`user:${toUserId}`).emit('typing:start', fromUser);
-      });
-
-      socket.on('typing:stop', ({ toUserId, fromUserId }) => {
-        socket.to(`user:${toUserId}`).emit('typing:stop', { fromUserId });
-      });
-
-      socket.on('disconnect', () => {
-        logger.debug(`Socket disconnected: ${socket.id}`);
-        if (socket.userId) {
-          io.emit('user:offline', { userId: socket.userId });
-        }
-      });
-    });
+    // Socket.io: authenticated rooms (see utils/socketAuth.js)
+    require('./src/utils/socketAuth').attachSocketHandlers(io);
 
     httpServer.listen(PORT, () => {
       logger.info(`🚀 Server running in ${NODE_ENV} on port ${PORT}`);

@@ -1,5 +1,6 @@
 'use strict';
 
+const escapeRegex = require('../utils/escapeRegex');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Company = require('../models/Company');
@@ -35,7 +36,7 @@ const ORDER_EDITABLE_FIELDS = [
 // logger.info because Winston drops info-level logs outside development, and
 // this is exactly the trail Render's logs need to show for support/debugging.
 async function awardLoyaltyForOrder(order, company) {
-  console.log(`[loyalty] Order ${order.orderNumber} — checking loyalty. company=${order.companyId} customer=${JSON.stringify(order.customer)} total=${order.total}`);
+  console.log(`[loyalty] Order ${order.orderNumber} — checking loyalty. company=${order.companyId} hasEmail=${Boolean(order.customer?.email)} total=${order.total}`);
 
   if (order.pointsAwarded) {
     console.log(`[loyalty] Order ${order.orderNumber} — already awarded, skipping.`);
@@ -64,7 +65,6 @@ async function awardLoyaltyForOrder(order, company) {
 
   await Order.updateOne({ _id: order._id }, { pointsAwarded: true });
 
-  console.log(`[loyalty] Order ${order.orderNumber} — customer phone: ${order.customer.phone || '(none)'}`);
   if (!order.customer.phone) return true;
 
   const storeLink = company?.storeSlug ? `bislyai.com/store/${company.storeSlug}` : 'our store';
@@ -84,7 +84,7 @@ async function commitOrderStock(order, userId, io) {
   let anyLow = false;
   for (const item of order.items || []) {
     if (!item.productId || !item.quantity) continue;
-    const product = await Product.findById(item.productId);
+    const product = await Product.findOne({ _id: item.productId, companyId: order.companyId });
     if (!product || !product.stock.trackStock) continue;
     const { low } = await applyStockAdjustment(product, -Math.abs(item.quantity), {
       reason: 'sale', orderId: order._id, userId, note: `Order ${order.orderNumber}`,
@@ -100,7 +100,7 @@ async function releaseOrderStock(order, userId) {
   if (!order.stockApplied) return;
   for (const item of order.items || []) {
     if (!item.productId || !item.quantity) continue;
-    const product = await Product.findById(item.productId);
+    const product = await Product.findOne({ _id: item.productId, companyId: order.companyId });
     if (!product || !product.stock.trackStock) continue;
     await applyStockAdjustment(product, Math.abs(item.quantity), {
       reason: 'return', orderId: order._id, userId, note: `Order ${order.orderNumber} ${order.status}`,
@@ -117,9 +117,9 @@ exports.getOrders = async (req, res, next) => {
     if (source) filter.source = source;
     if (paymentMethod) filter.paymentMethod = paymentMethod;
     if (search) filter.$or = [
-      { orderNumber: { $regex: search, $options: 'i' } },
-      { 'customer.name': { $regex: search, $options: 'i' } },
-      { 'customer.email': { $regex: search, $options: 'i' } },
+      { orderNumber: { $regex: escapeRegex(search), $options: 'i' } },
+      { 'customer.name': { $regex: escapeRegex(search), $options: 'i' } },
+      { 'customer.email': { $regex: escapeRegex(search), $options: 'i' } },
     ];
     const skip = (page - 1) * limit;
     const [orders, total] = await Promise.all([

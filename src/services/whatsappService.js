@@ -17,7 +17,6 @@ const fs = require('fs');
 const logger = require('../utils/logger');
 
 const WhatsAppConversation = require('../models/WhatsAppConversation');
-const DocumentChunk = require('../models/DocumentChunk');
 const { getEmbedding } = require('./embeddingService');
 const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
 const { generateWhatsAppReply } = require('./groqService');
@@ -232,7 +231,7 @@ async function handleIncomingMessage(companyId, customerPhone, customerName, mes
   const lower = messageText.toLowerCase();
   const keywordHit = HANDOVER_KEYWORDS.some((k) => lower.includes(k));
 
-  const chunks = await DocumentChunk.find({ companyId }).lean();
+  const chunks = await require('../utils/customerKnowledge').customerFacingChunks(companyId);
 
   let embedding = null;
   try { embedding = await getEmbedding(messageText); }

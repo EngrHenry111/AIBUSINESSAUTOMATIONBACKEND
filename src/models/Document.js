@@ -22,6 +22,10 @@ const documentSchema = new mongoose.Schema({
   wordCount: { type: Number, default: 0 },
   tags: [{ type: String, trim: true }],
   description: { type: String, maxlength: 500 },
+  // Only documents switched on here feed the AI that answers the public
+  // (website chat widget, WhatsApp bot). Off by default: an uploaded file
+  // is internal until the business says customers may see it.
+  customerFacing: { type: Boolean, default: false },
 }, { timestamps: true });
 
 // Compound indexes cover companyId lookups — no need for inline index: true

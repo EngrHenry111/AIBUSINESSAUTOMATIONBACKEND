@@ -1,7 +1,7 @@
 'use strict';
 
+const { customerFacingChunks } = require('../utils/customerKnowledge');
 const Company = require('../models/Company');
-const DocumentChunk = require('../models/DocumentChunk');
 const WidgetConversation = require('../models/WidgetConversation');
 const { getEmbedding } = require('../services/embeddingService');
 const { generateWhatsAppReply } = require('../services/groqService');
@@ -143,7 +143,7 @@ exports.handleWidgetMessage = async (req, res, next) => {
     try { questionEmbedding = await getEmbedding(message); }
     catch { logger.warn('Embedding service unavailable for widget chat, falling back to keyword-only search'); }
 
-    const chunks = await DocumentChunk.find({ companyId: company._id }).lean();
+    const chunks = await customerFacingChunks(company._id);
     let reply;
     let sources = [];
     let noAnswer = false;
@@ -185,7 +185,9 @@ exports.handleWidgetMessage = async (req, res, next) => {
     }
     io(req)?.to(`company:${company._id}`).emit('widget:new_message', { conversationId: convo._id });
 
-    res.status(200).json({ success: true, data: { reply, sessionId, sources } });
+    // Source document names stay with the team (saved on the conversation),
+    // not sent to the visitor.
+    res.status(200).json({ success: true, data: { reply, sessionId } });
   } catch (err) { next(err); }
 };
 
