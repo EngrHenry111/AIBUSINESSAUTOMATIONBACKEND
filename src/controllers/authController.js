@@ -30,7 +30,7 @@ const { recordFailedLogin } = require('../utils/suspiciousActivity');
 
 exports.register = async (req, res, next) => {
   try {
-    const { name, email, password, companyName, industry, phone } = req.body;
+    const { name, email, password, companyName, industry, phone, ref } = req.body;
     const existingUser = await User.findOne({ email });
     if (existingUser) return next(new AppError('Email already registered.', 409));
 
@@ -46,6 +46,13 @@ exports.register = async (req, res, next) => {
     });
     company.owner = user._id;
     await company.save();
+
+    // Signed up through a referral link. A bad or self-referring code
+    // mustn't stop the account being created.
+    if (ref) {
+      await require('../utils/referrals').attach(company._id, ref)
+        .catch((err) => logger.info(`Referral code ${ref} not applied for ${company._id}: ${err.message}`));
+    }
 
     // Email verification — non-blocking; user can use the app in the meantime
     await issueVerification(user);

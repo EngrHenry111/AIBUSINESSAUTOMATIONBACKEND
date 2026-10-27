@@ -67,6 +67,7 @@ const draftRoutes = require('./routes/draftRoutes');
 const portalRoutes = require('./routes/portalRoutes');
 const twoFactorRoutes = require('./routes/twoFactorRoutes');
 const auditRoutes = require('./routes/auditRoutes');
+const referralRoutes = require('./routes/referralRoutes');
 
 
 const app = express();
@@ -248,6 +249,7 @@ app.use(`${API}/admin`, adminRoutes);
 app.use(`${API}/whatsapp`, whatsappRoutes);
 app.use(`${API}/payments`, paymentRoutes);
 app.use(`${API}/payment-settings`, paymentSettingsRoutes);
+app.use(`${API}/referrals`, referralRoutes);
 app.use(`${API}/store`, storefrontRoutes);
 app.use(`${API}/widget`, widgetRoutes);
 app.use(`${API}/payroll`, payrollRoutes);

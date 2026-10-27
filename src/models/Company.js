@@ -52,6 +52,14 @@ const companySchema = new mongoose.Schema({
     lastPaymentReference: String,
     lastPaymentAmount: Number,
   },
+  // Referral programme: this company's own share code, who referred it, and
+  // how much of its earned referral balance has been withdrawn or spent.
+  referral: {
+    code: { type: String, uppercase: true, trim: true },
+    referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
+    referredAt: Date,
+    spent: { type: Number, default: 0 },
+  },
   // The currency new invoices/orders default to, and which currencies this
   // company is willing to bill in. Distinct from the legacy, unused
   // settings.currency below (kept only for backward compatibility).
@@ -219,6 +227,8 @@ const companySchema = new mongoose.Schema({
 companySchema.index({ slug: 1 });
 companySchema.index({ storeSlug: 1 }, { unique: true, sparse: true });
 companySchema.index({ owner: 1 });
+companySchema.index({ 'referral.code': 1 }, { unique: true, sparse: true });
+companySchema.index({ 'referral.referredBy': 1 });
 companySchema.index({ 'subscription.status': 1 });
 companySchema.index({ storeEnabled: 1, 'marketplace.category': 1 });
 companySchema.index({ storeEnabled: 1, 'marketplace.isFeatured': 1 });

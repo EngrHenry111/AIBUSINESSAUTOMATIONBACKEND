@@ -6,6 +6,7 @@ const { protect } = require('../middleware/authMiddleware');
 const { isSuperAdmin } = require('../middleware/roleMiddleware');
 const { validate } = require('../middleware/validateMiddleware');
 const ctrl = require('../controllers/adminController');
+const referral = require('../controllers/referralController');
 
 const router = express.Router();
 
@@ -33,6 +34,12 @@ router.patch('/companies/:id/plan', [
   body('plan').isIn(['trial', 'starter', 'professional', 'business', 'enterprise'])
     .withMessage('Invalid plan'),
 ], validate, ctrl.changePlan);
+
+// ── Referrals ──────────────────────────────────────────────────────────────
+router.get('/referrals', referral.adminOverview);
+router.get('/referrals/:companyId/earnings', referral.adminEarnings);
+router.patch('/referrals/payouts/:id', referral.adminSettle);
+router.patch('/referrals/earnings/:id/reverse', referral.adminReverse);
 
 // ── Users ──────────────────────────────────────────────────────────────────
 router.get('/users', ctrl.getUsers);

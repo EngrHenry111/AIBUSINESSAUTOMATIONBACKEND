@@ -11,6 +11,7 @@ const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 const Branch = require('../models/Branch');
 const { ENTERPRISE_PRICING, enterpriseQuote } = require('../utils/enterprisePricing');
+const { creditReferral } = require('../utils/referrals');
 
 async function activeBranchCount(companyId) {
   return Branch.countDocuments({ companyId, status: 'active' });
@@ -602,6 +603,7 @@ exports.webhook = async (req, res) => {
                 { upsert: true, setDefaultsOnInsert: true }
               );
             } catch (e) { logger.error(`recurring payment record failed: ${e.message}`); }
+            await creditReferral({ companyId: company._id, reference, amount, plan: company.subscription.plan, billingCycle: company.subscription.billingCycle });
           }
           logger.info(`Subscription renewed for company ${company._id} → ${extended.toISOString()}`);
         }
@@ -764,6 +766,7 @@ async function upgradePlan(companyId, plan, billingCycle, reference, amount, ext
   } catch (err) {
     logger.error(`Failed to record payment ${reference}: ${err.message}`);
   }
+  await creditReferral({ companyId, reference, amount, plan, billingCycle });
 
   // Moved to paying by transfer: stop the old card subscription so the card
   // isn't charged as well.
