@@ -2,7 +2,7 @@
 
 const mongoose = require('mongoose');
 
-// 5% of one subscription payment made by a referred company, owed to the
+// 10% (referrals.RATE) of one subscription payment made by a referred company, owed to the
 // company that referred them. One row per payment reference, so the verify
 // call and the webhook for the same charge can't both pay out.
 const referralEarningSchema = new mongoose.Schema({

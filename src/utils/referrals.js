@@ -17,7 +17,7 @@ const { AppError } = require('../middleware/errorMiddleware');
 const { enterpriseQuote } = require('./enterprisePricing');
 const logger = require('./logger');
 
-const RATE = 0.05;
+const RATE = 0.10;
 const HOLD_DAYS = 14;
 const MIN_CASH = 5000;
 const CLAIM_DAYS = 30; // a code can be added this long after signing up
