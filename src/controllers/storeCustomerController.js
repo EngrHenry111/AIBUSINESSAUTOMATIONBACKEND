@@ -1,5 +1,6 @@
 'use strict';
 
+const { captureLead } = require('../utils/leadCapture');
 const crypto = require('crypto');
 const StoreCustomer = require('../models/StoreCustomer');
 const CustomerPoints = require('../models/CustomerPoints');
@@ -49,6 +50,9 @@ exports.registerStoreCustomer = async (req, res, next) => {
 
     const customer = await StoreCustomer.create({ companyId: req.store._id, name: name.trim(), email: cleanEmail, phone, password });
     const token = generateStoreCustomerToken(customer._id, req.store._id);
+    captureLead(req.store._id, {
+      source: 'store', name: customer.name, email: cleanEmail, phone, activity: 'Created an account on your store',
+    });
 
     emailService.send({
       to: cleanEmail,

@@ -1,5 +1,6 @@
 'use strict';
 
+const { captureLead, contactFromText, excerpt } = require('../utils/leadCapture');
 const { customerFacingChunks } = require('../utils/customerKnowledge');
 const Company = require('../models/Company');
 const WidgetConversation = require('../models/WidgetConversation');
@@ -184,6 +185,16 @@ exports.handleWidgetMessage = async (req, res, next) => {
       });
     }
     io(req)?.to(`company:${company._id}`).emit('widget:new_message', { conversationId: convo._id });
+
+    // Anyone who leaves an email or phone — in the pre-chat form or typed
+    // into a message — becomes (or updates) a lead.
+    const typed = contactFromText(message);
+    if (convo.visitorEmail || typed.email || typed.phone) {
+      captureLead(company._id, {
+        source: 'chat_widget', name: convo.visitorName, email: convo.visitorEmail || typed.email, phone: typed.phone,
+        activityType: 'chat', activity: `Website chat: "${excerpt(message)}"${noAnswer ? ' — needs a reply from your team' : ''}`,
+      });
+    }
 
     // Source document names stay with the team (saved on the conversation),
     // not sent to the visitor.

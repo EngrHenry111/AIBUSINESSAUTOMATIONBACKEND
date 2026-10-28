@@ -165,6 +165,13 @@ async function bootstrap() {
     setInterval(reconcileStorefrontOrders, 15 * 60 * 1000);
     logger.info('✅ Storefront order reconciliation scheduled (runs every 15min)');
 
+    // ── Leads: follow-up reminders (hourly) + one-off phone key backfill ──
+    const { runLeadFollowUps } = require('./src/utils/leadFollowUps');
+    require('./src/utils/leadCapture').backfillPhoneKeys();
+    runLeadFollowUps();
+    setInterval(runLeadFollowUps, 60 * 60 * 1000);
+    logger.info('✅ Lead follow-up reminders scheduled (runs hourly)');
+
     // Socket.io: authenticated rooms (see utils/socketAuth.js)
     require('./src/utils/socketAuth').attachSocketHandlers(io);
 

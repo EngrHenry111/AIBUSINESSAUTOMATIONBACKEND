@@ -185,6 +185,15 @@ const companySchema = new mongoose.Schema({
   // website is plan-gated (see widgetController's isExternalEmbed). Domains
   // are auto-registered the first time a request for that site is seen —
   // there's no separate "add a domain" admin step.
+  // Which channels add people to Leads by themselves (utils/leadCapture),
+  // and whether new leads are scored by the AI on arrival.
+  leadCapture: {
+    chat: { type: Boolean, default: true },
+    whatsapp: { type: Boolean, default: true },
+    store: { type: Boolean, default: true },
+    card: { type: Boolean, default: true },
+    aiScoring: { type: Boolean, default: true },
+  },
   widgetSettings: {
     widgetEnabled: { type: Boolean, default: true },
     greeting: { type: String, trim: true, maxlength: 300 },

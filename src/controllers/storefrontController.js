@@ -1,5 +1,6 @@
 'use strict';
 
+const { captureLead } = require('../utils/leadCapture');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const Company = require('../models/Company');
@@ -376,6 +377,15 @@ exports.saveAbandonedCart = async (req, res, next) => {
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
 
+    // Name and phone come after email on the checkout form, so waiting for
+    // them avoids a lead for every half-typed address.
+    if (name && String(phone || '').replace(/\D/g, '').length >= 10) {
+      captureLead(company._id, {
+        source: 'store', name, email: cleanEmail, phone, activityType: 'order',
+        activity: `Started checkout on your store: ${naira(total)} in the cart`,
+      });
+    }
+
     res.status(200).json({ success: true });
   } catch (err) { next(err); }
 };
@@ -614,6 +624,13 @@ exports.initializeStorePayment = async (req, res, next) => {
     }
 
     let total = Math.round((subtotal + deliveryFee - discount) * 100) / 100;
+
+    // Pressing "pay" is the strongest buying signal there is — awaited so the
+    // lead exists before a pay-on-delivery order marks it won a moment later.
+    await captureLead(company._id, {
+      source: 'store', name: customer.name, email: customer.email, phone: customer.phone, activityType: 'order',
+      activity: `Checked out on your store: ${naira(total)} (${resolvedItems.map((i) => `${i.quantity}× ${i.name}`).join(', ')})`,
+    });
 
     // Loyalty redemption — re-validate server-side against the customer's
     // real balance rather than trusting the discount the client computed.

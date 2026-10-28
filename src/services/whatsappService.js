@@ -210,6 +210,12 @@ async function handleIncomingMessage(companyId, customerPhone, customerName, mes
   await convo.save();
 
   const inbound = convo.messages[convo.messages.length - 1];
+  require('../utils/leadCapture').captureLead(companyId, {
+    source: 'whatsapp', phone: customerPhone,
+    name: convo.customerName && convo.customerName !== customerPhone ? convo.customerName : undefined,
+    email: require('../utils/leadCapture').contactFromText(messageText).email,
+    activityType: 'whatsapp', activity: `WhatsApp: "${require('../utils/leadCapture').excerpt(messageText)}"`,
+  });
   roomEmit(companyId, 'whatsapp:new_message', {
     conversationId: convo._id, message: inbound, customerName: convo.customerName, status: convo.status,
   });

@@ -1,5 +1,6 @@
 'use strict';
 
+const { markLeadWon } = require('./leadCapture');
 const Customer = require('../models/Customer');
 const logger = require('./logger');
 
@@ -41,10 +42,11 @@ async function recordCustomerTransaction({
       if (!existing.phone && phone) existing.phone = phone;
       if (existing.status === 'inactive') existing.status = 'active';
       await existing.save();
+      if (countsAsOrder) await markLeadWon(companyId, { email, phone }, { amount, customer: existing });
       return existing;
     }
 
-    return await Customer.create({
+    const created = await Customer.create({
       companyId,
       name: name || email || phone,
       email: email || undefined,
@@ -55,6 +57,8 @@ async function recordCustomerTransaction({
       lastOrderAt: when,
       createdBy: userId,
     });
+    if (countsAsOrder) await markLeadWon(companyId, { email, phone }, { amount, customer: created });
+    return created;
   } catch (err) {
     logger.warn(`Customer sync failed: ${err.message}`);
     return null;

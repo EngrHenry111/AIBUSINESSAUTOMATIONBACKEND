@@ -1,15 +1,16 @@
 'use strict';
 
+const Company = require('../models/Company');
 const Lead = require('../models/Lead');
 const Invoice = require('../models/Invoice');
 const Appointment = require('../models/Appointment');
 const Meeting = require('../models/Meeting');
-const { generateStructured } = require('../services/groqService');
-const { cleanAIText } = require('../utils/cleanAIText');
+const { analyzeLeadRecord } = require('../utils/leadAnalysis');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { pick } = require('../utils/pick');
 
+const AUTO_SOURCE_LABELS = { chat_widget: 'website chat', whatsapp: 'WhatsApp', store: 'your online store', business_card: 'your business card' };
 const LEAD_STATUSES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 // `activities`/`notes` are append-only threads managed by dedicated actions
 // (the $push below, and the notes endpoint) — never bulk-replaceable via a
@@ -88,6 +89,7 @@ exports.updateLead = async (req, res, next) => {
     if (!prev) return next(new AppError('Lead not found.', 404));
 
     const update = pick(req.body, LEAD_EDITABLE_FIELDS);
+    if ('phone' in update) update.phoneKey = Lead.phoneKeyOf(update.phone);
     // Log a status change onto the activity trail
     if (update.status && update.status !== prev.status) {
       update.$push = {
@@ -110,6 +112,28 @@ exports.updateLead = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── GET/PUT /leads/capture-settings ────────────────────────────────────
+// Which channels add leads by themselves, and AI scoring on arrival.
+const CAPTURE_KEYS = ['chat', 'whatsapp', 'store', 'card', 'aiScoring'];
+const captureSettingsOf = (company) => Object.fromEntries(CAPTURE_KEYS.map((k) => [k, company?.leadCapture?.[k] !== false]));
+
+exports.getCaptureSettings = async (req, res, next) => {
+  try {
+    const company = await Company.findById(req.companyId).select('leadCapture').lean();
+    res.status(200).json({ success: true, data: captureSettingsOf(company) });
+  } catch (err) { next(err); }
+};
+
+exports.updateCaptureSettings = async (req, res, next) => {
+  try {
+    const $set = {};
+    for (const k of CAPTURE_KEYS) if (typeof req.body[k] === 'boolean') $set[`leadCapture.${k}`] = req.body[k];
+    const company = await Company.findByIdAndUpdate(req.companyId, { $set }, { new: true }).select('leadCapture').lean();
+    await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'lead.capture_settings', resource: 'Company', resourceId: req.companyId, description: JSON.stringify($set), ip: req.ip });
+    res.status(200).json({ success: true, data: captureSettingsOf(company) });
+  } catch (err) { next(err); }
+};
+
 exports.deleteLead = async (req, res, next) => {
   try {
     const lead = await Lead.findOneAndDelete({ _id: req.params.id, companyId: req.companyId });
@@ -124,42 +148,7 @@ exports.analyzeLead = async (req, res, next) => {
     const lead = await Lead.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!lead) return next(new AppError('Lead not found.', 404));
 
-    const prompt = `Analyze this sales lead and provide a JSON response:
-
-Lead Data:
-- Name: ${lead.name}
-- Email: ${lead.email}
-- Company: ${lead.company || 'Unknown'}
-- Position: ${lead.position || 'Unknown'}
-- Source: ${lead.source}
-- Status: ${lead.status}
-- Value: ${lead.value} ${lead.currency}
-- Last contacted: ${lead.lastContactedAt ? new Date(lead.lastContactedAt).toDateString() : 'Never'}
-- Notes: ${[lead.description, ...(lead.notes || []).map((n) => n.content)].filter(Boolean).join(' | ') || 'None'}
-
-Provide analysis with lead quality score (0-100), recommended next action, urgency, and a professional follow-up email draft.`;
-
-    const schema = {
-      score: 'number 0-100',
-      priority: 'high|medium|low',
-      sentiment: 'positive|neutral|negative',
-      summary: 'string',
-      recommendedAction: 'string',
-      followUpDraft: 'string (full email)',
-    };
-
-    const analysis = await generateStructured(prompt, schema, 'lead_agent');
-
-    lead.score = analysis.score || lead.score;
-    lead.ai = {
-      summary: cleanAIText(analysis.summary),
-      recommendedAction: cleanAIText(analysis.recommendedAction),
-      followUpDraft: cleanAIText(analysis.followUpDraft),
-      sentiment: analysis.sentiment,
-      priority: analysis.priority,
-      analyzedAt: new Date(),
-    };
-    await lead.save();
+    await analyzeLeadRecord(lead);
 
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'lead.ai_analyze', resource: 'Lead', resourceId: lead._id, ip: req.ip });
 
@@ -200,8 +189,8 @@ exports.getLeadDetail = async (req, res, next) => {
 
     const timeline = [
       {
-        type: 'created', icon: 'created',
-        description: 'Lead created',
+        type: 'created', icon: lead.autoCaptured ? 'captured' : 'created',
+        description: lead.autoCaptured ? `Captured automatically from ${AUTO_SOURCE_LABELS[lead.source] || lead.source}` : 'Lead created',
         at: lead.createdAt, user: lead.createdBy?.name || null,
       },
       ...(lead.activities || []).map((a) => ({

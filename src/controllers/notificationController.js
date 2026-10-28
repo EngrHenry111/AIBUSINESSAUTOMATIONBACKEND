@@ -1,5 +1,6 @@
 'use strict';
 
+const LEAD_SOURCE_LABELS = { chat_widget: 'website chat', whatsapp: 'WhatsApp', store: 'your store', business_card: 'your business card' };
 const Lead = require('../models/Lead');
 const Invoice = require('../models/Invoice');
 const Appointment = require('../models/Appointment');
@@ -42,7 +43,7 @@ exports.getNotifications = async (req, res, next) => {
       Appointment.find({ companyId, scheduledAt: { $gte: today, $lt: tomorrow }, status: { $in: ['confirmed', 'pending'] } })
         .select('title customer scheduledAt').limit(5),
       Lead.find({ companyId, createdAt: { $gte: new Date(now - 24 * 60 * 60 * 1000) } })
-        .select('name company createdAt').limit(5),
+        .select('name company createdAt source autoCaptured').limit(5),
       Order.find({ companyId, status: { $in: ['pending', 'confirmed'] }, createdAt: { $gte: new Date(now - 48 * 60 * 60 * 1000) } })
         .select('orderNumber customer status source total currency').limit(8),
       Message.countDocuments({ companyId, recipientId: userId, isRead: false }),
@@ -57,6 +58,14 @@ exports.getNotifications = async (req, res, next) => {
       Meeting.find({ companyId, 'actionItems.assignedTo': userId, 'actionItems.status': 'pending' })
         .select('title actionItems referenceNumber').limit(10),
     ]);
+
+    // Follow-ups due: the ones assigned to me, plus unassigned ones for
+    // managers and the owner (utils/leadFollowUps emails the same people).
+    const seesUnassigned = ['company_owner', 'manager', 'super_admin'].includes(req.user?.role);
+    const dueFollowUps = await Lead.find({
+      companyId, nextFollowUpAt: { $lte: now }, status: { $nin: ['won', 'lost', 'converted'] },
+      assignedTo: seesUnassigned ? { $in: [userId, null] } : userId,
+    }).select('name nextFollowUpAt').sort({ nextFollowUpAt: 1 }).limit(8);
 
     const notifications = [
       ...overdueInvoices.map(inv => ({
@@ -80,8 +89,16 @@ exports.getNotifications = async (req, res, next) => {
       ...newLeads.map(lead => ({
         id: `lead-${lead._id}`, type: 'success',
         title: 'New Lead',
-        message: `${lead.name}${lead.company ? ` from ${lead.company}` : ''} was added`,
-        url: '/leads', time: lead.createdAt,
+        message: lead.autoCaptured
+          ? `${lead.name} came in from ${LEAD_SOURCE_LABELS[lead.source] || lead.source}`
+          : `${lead.name}${lead.company ? ` from ${lead.company}` : ''} was added`,
+        url: `/leads/${lead._id}`, time: lead.createdAt,
+      })),
+      ...dueFollowUps.map(lead => ({
+        id: `lead-due-${lead._id}-${new Date(lead.nextFollowUpAt).getTime()}`, type: 'warning',
+        title: 'Follow-up Due',
+        message: `Follow up with ${lead.name}`,
+        url: `/leads/${lead._id}`, time: lead.nextFollowUpAt,
       })),
       ...pendingOrders.map(order => (order.source === 'storefront' ? {
         id: `order-${order._id}`, type: 'success',

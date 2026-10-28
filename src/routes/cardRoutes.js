@@ -12,6 +12,7 @@ router.get('/:username', publicStoreLimiter, ctrl.getCard);
 router.get('/:username/vcard', publicStoreLimiter, ctrl.generateVCard);
 router.get('/:username/qrcode', publicStoreLimiter, ctrl.getCardQRCode);
 router.post('/:username/save', publicStoreLimiter, ctrl.saveContact);
+router.post('/:username/connect', publicStoreLimiter, ctrl.connect);
 
 // ── PROTECTED — the signed-in user managing their own card ────────────────
 router.get('/me/settings', protect, ctrl.getMyCard);

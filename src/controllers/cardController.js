@@ -1,5 +1,6 @@
 'use strict';
 
+const { captureLead, excerpt } = require('../utils/leadCapture');
 const QRCode = require('qrcode');
 const User = require('../models/User');
 const Company = require('../models/Company');
@@ -48,6 +49,9 @@ function publicCard(user, company) {
     links: (cs.links || []).map((l) => ({ type: l.type, label: l.label, url: l.url, icon: l.icon })),
     primaryColor: cs.primaryColor || '#6366f1',
     template: cs.template || 'modern',
+    // The "share your details" form only makes sense when there's a
+    // company to receive the lead.
+    acceptsContacts: Boolean(company),
   };
 }
 
@@ -63,6 +67,31 @@ exports.getCard = async (req, res, next) => {
     User.updateOne({ _id: user._id }, { $inc: { 'cardSettings.views': 1 } }).catch(() => {});
 
     res.status(200).json({ success: true, data: publicCard(user, company) });
+  } catch (err) { next(err); }
+};
+
+// ── POST /card/:username/connect { name, email, phone, message } ─────────
+// A visitor leaves their details: they become a lead for the card owner's
+// company, assigned to the card owner.
+exports.connect = async (req, res, next) => {
+  try {
+    const user = await findByUsername(req.params.username);
+    if (!user || user.cardSettings?.enabled === false || !user.companyId) {
+      return next(new AppError('Card not found.', 404));
+    }
+    const name = String(req.body.name || '').trim().slice(0, 120);
+    const email = String(req.body.email || '').trim().toLowerCase().slice(0, 160);
+    const phone = String(req.body.phone || '').trim().slice(0, 30);
+    const message = String(req.body.message || '').trim().slice(0, 1000);
+    if (!name) return next(new AppError('Please enter your name.', 400));
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new AppError('Enter a valid email address.', 400));
+    if (!email && String(phone).replace(/\D/g, '').length < 7) return next(new AppError('Leave an email or a phone number.', 400));
+
+    await captureLead(user.companyId, {
+      source: 'business_card', name, email, phone, assignedTo: user._id,
+      activity: `Shared their details from ${user.name}'s business card${message ? `: "${excerpt(message)}"` : ''}`,
+    });
+    res.status(200).json({ success: true, message: `Thanks! ${user.name} will be in touch.` });
   } catch (err) { next(err); }
 };
 
