@@ -7,7 +7,7 @@ const Document = require('../models/Document');
 const DocumentChunk = require('../models/DocumentChunk');
 
 async function customerFacingChunks(companyId) {
-  const ids = await Document.find({ companyId, customerFacing: true }).distinct('_id');
+  const ids = await Document.find({ companyId, customerFacing: true, managersOnly: { $ne: true } }).distinct('_id');
   if (!ids.length) return [];
   return DocumentChunk.find({ companyId, documentId: { $in: ids } }).lean();
 }

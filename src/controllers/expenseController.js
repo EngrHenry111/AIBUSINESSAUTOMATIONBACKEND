@@ -1,5 +1,6 @@
 'use strict';
 
+const { uploadPrivate } = require('../utils/privateFiles');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
@@ -28,12 +29,9 @@ async function uploadReceiptFile(localPath, companyId) {
   if (!cloudinary) {
     return `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${localPath.split(/[\\/]/).pop()}`;
   }
-  const r = await cloudinary.uploader.upload(localPath, {
-    folder: `business-ai/${companyId}/receipts`,
-    resource_type: 'auto',
-  });
+  const r = await uploadPrivate(localPath, { folder: `business-ai/${companyId}/receipts` });
   fs.unlink(localPath, () => {});
-  return r.secure_url;
+  return r.url;
 }
 
 async function revenueBetween(companyId, start, end) {

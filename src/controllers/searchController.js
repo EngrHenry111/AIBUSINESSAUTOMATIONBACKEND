@@ -6,6 +6,7 @@ const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
 const Appointment = require('../models/Appointment');
 const Document = require('../models/Document');
+const { documentFilterFor } = require('../utils/documentAccess');
 const Meeting = require('../models/Meeting');
 
 exports.globalSearch = async (req, res, next) => {
@@ -29,7 +30,7 @@ exports.globalSearch = async (req, res, next) => {
         .select('orderNumber customer total status').limit(limit),
       Appointment.find({ companyId, $or: [{ title: regex }, { 'customer.name': regex }] })
         .select('title customer scheduledAt status').limit(limit),
-      Document.find({ companyId, $or: [{ name: regex }, { description: regex }] })
+      Document.find({ companyId, ...documentFilterFor(req.user), $or: [{ name: regex }, { description: regex }] })
         .select('name fileType status createdAt').limit(limit),
       Meeting.find({ companyId, title: regex })
         .select('title scheduledAt status').limit(limit),

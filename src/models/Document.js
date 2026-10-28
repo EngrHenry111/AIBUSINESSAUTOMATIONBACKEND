@@ -26,9 +26,21 @@ const documentSchema = new mongoose.Schema({
   // (website chat widget, WhatsApp bot). Off by default: an uploaded file
   // is internal until the business says customers may see it.
   customerFacing: { type: Boolean, default: false },
+  // Hidden from employees (list, search and AI Assistant) — see
+  // utils/documentAccess. Never customer-facing at the same time.
+  managersOnly: { type: Boolean, default: false },
 }, { timestamps: true });
 
 // Compound indexes cover companyId lookups — no need for inline index: true
+// Where the original file is stored is server business only.
+documentSchema.set('toJSON', {
+  transform(doc, ret) {
+    delete ret.cloudinaryUrl;
+    delete ret.cloudinaryPublicId;
+    return ret;
+  },
+});
+
 documentSchema.index({ companyId: 1, status: 1 });
 documentSchema.index({ companyId: 1, knowledgeBaseId: 1 });
 documentSchema.index({ companyId: 1, createdAt: -1 });

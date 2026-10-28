@@ -1,5 +1,6 @@
 'use strict';
 
+const { uploadPrivate } = require('../utils/privateFiles');
 const escapeRegex = require('../utils/escapeRegex');
 const fs = require('fs');
 const Procurement = require('../models/Procurement');
@@ -341,9 +342,9 @@ exports.addVendorQuotation = async (req, res, next) => {
     let quotationDocument;
     if (req.file) {
       if (cloudinary) {
-        const r = await cloudinary.uploader.upload(req.file.path, { folder: `business-ai/${req.companyId}/procurement`, resource_type: 'raw' });
+        const r = await uploadPrivate(req.file.path, { folder: `business-ai/${req.companyId}/procurement`, resourceType: 'raw' });
         fs.unlink(req.file.path, () => {});
-        quotationDocument = r.secure_url;
+        quotationDocument = r.url;
       } else {
         quotationDocument = `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${req.file.path.split(/[\\/]/).pop()}`;
       }

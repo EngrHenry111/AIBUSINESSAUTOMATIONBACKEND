@@ -1,5 +1,6 @@
 'use strict';
 
+const { hiddenDocumentIds } = require('../utils/documentAccess');
 const Chat = require('../models/Chat');
 const DocumentChunk = require('../models/DocumentChunk');
 const Company = require('../models/Company');
@@ -126,6 +127,8 @@ exports.askQuestion = async (req, res, next) => {
 
     // 2. Fetch chunks (scoped to company + optional knowledge base)
     const chunkFilter = { companyId: req.companyId };
+    const hidden = await hiddenDocumentIds(req.companyId, req.user);
+    if (hidden.length) chunkFilter.documentId = { $nin: hidden };
     if (knowledgeBaseId || chat.knowledgeBaseId) {
       chunkFilter.knowledgeBaseId = knowledgeBaseId || chat.knowledgeBaseId;
     }

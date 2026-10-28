@@ -271,6 +271,7 @@ app.use(`${API}/hospital`, hospitalRoutes);
 app.use(`${API}/drafts`, draftRoutes);
 app.use(`${API}/messages`, messageRoutes);
 app.use(`${API}/search`, searchRoutes);
+app.use(`${API}/files`, require('./routes/fileRoutes'));
 app.use(`${API}/notifications`, notificationRoutes);
 app.use(`${API}/portal`, portalRoutes);
 app.use(`${API}/audit-logs`, auditRoutes);

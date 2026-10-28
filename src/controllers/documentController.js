@@ -1,5 +1,7 @@
 'use strict';
 
+const { uploadPrivate } = require('../utils/privateFiles');
+const { documentFilterFor } = require('../utils/documentAccess');
 const { writeAuditLog } = require('../utils/auditLog');
 const Document = require('../models/Document');
 const DocumentChunk = require('../models/DocumentChunk');
@@ -57,15 +59,13 @@ async function uploadToCloudinary(localPath, companyId, originalName) {
     const { cloudinary } = require('../config/cloudinary');
     if (!cloudinary) return null;
 
-    const result = await cloudinary.uploader.upload(localPath, {
+    return await uploadPrivate(localPath, {
       folder: `business-ai/${companyId}/documents`,
-      resource_type: 'raw',
+      resourceType: 'raw',
       use_filename: true,
       unique_filename: true,
       overwrite: false,
     });
-    logger.info(`Uploaded to Cloudinary: ${result.secure_url}`);
-    return { url: result.secure_url, publicId: result.public_id };
   } catch (err) {
     logger.warn(`Cloudinary upload failed (file still processed locally): ${err.message}`);
     return null;
@@ -196,7 +196,7 @@ async function processDocument(doc, localPath, companyId, userId) {
 exports.getDocuments = async (req, res, next) => {
   try {
     const { knowledgeBaseId, status, page = 1, limit = 20 } = req.query;
-    const filter = { companyId: req.companyId };
+    const filter = { companyId: req.companyId, ...documentFilterFor(req.user) };
     if (knowledgeBaseId) filter.knowledgeBaseId = knowledgeBaseId;
     if (status) filter.status = status;
     const [documents, total] = await Promise.all([
@@ -213,7 +213,7 @@ exports.getDocuments = async (req, res, next) => {
 
 exports.getDocument = async (req, res, next) => {
   try {
-    const document = await Document.findOne({ _id: req.params.id, companyId: req.companyId })
+    const document = await Document.findOne({ _id: req.params.id, companyId: req.companyId, ...documentFilterFor(req.user) })
       .populate('uploadedBy', 'name avatar').populate('knowledgeBaseId', 'name color');
     if (!document) return next(new AppError('Document not found.', 404));
     const chunks = await DocumentChunk.find({ documentId: req.params.id, companyId: req.companyId })
@@ -226,16 +226,37 @@ exports.getDocument = async (req, res, next) => {
 // Lets the website chat and WhatsApp bot answer customers from this file.
 exports.setCustomerFacing = async (req, res, next) => {
   try {
+    const customerFacing = req.body.customerFacing === true;
     const document = await Document.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
-      { customerFacing: req.body.customerFacing === true },
+      customerFacing ? { customerFacing, managersOnly: false } : { customerFacing },
       { new: true },
-    ).select('name customerFacing');
+    ).select('name customerFacing managersOnly');
     if (!document) return next(new AppError('Document not found.', 404));
     await writeAuditLog({
       companyId: req.companyId, userId: req.user._id,
       action: 'document.customer_facing', resource: 'Document', resourceId: document._id,
       description: `${document.name}: ${document.customerFacing ? 'customers can now see it' : 'internal only'}`, ip: req.ip,
+    });
+    res.status(200).json({ success: true, data: document });
+  } catch (err) { next(err); }
+};
+
+// ── PATCH /documents/:id/access { managersOnly } ───────────────────────
+// Hides a sensitive file from employees; managers and the owner still see it.
+exports.setManagersOnly = async (req, res, next) => {
+  try {
+    const managersOnly = req.body.managersOnly === true;
+    const document = await Document.findOneAndUpdate(
+      { _id: req.params.id, companyId: req.companyId },
+      managersOnly ? { managersOnly, customerFacing: false } : { managersOnly },
+      { new: true },
+    ).select('name customerFacing managersOnly');
+    if (!document) return next(new AppError('Document not found.', 404));
+    await writeAuditLog({
+      companyId: req.companyId, userId: req.user._id,
+      action: 'document.access', resource: 'Document', resourceId: document._id,
+      description: `${document.name}: ${document.managersOnly ? 'managers only' : 'whole team'}`, ip: req.ip,
     });
     res.status(200).json({ success: true, data: document });
   } catch (err) { next(err); }
@@ -256,7 +277,7 @@ exports.deleteDocument = async (req, res, next) => {
 
 exports.getDocumentStatus = async (req, res, next) => {
   try {
-    const doc = await Document.findOne({ _id: req.params.id, companyId: req.companyId })
+    const doc = await Document.findOne({ _id: req.params.id, companyId: req.companyId, ...documentFilterFor(req.user) })
       .select('status processingError chunksCount name');
     if (!doc) return next(new AppError('Document not found.', 404));
     res.status(200).json({ success: true, data: doc });
@@ -267,7 +288,7 @@ exports.getDocumentStatus = async (req, res, next) => {
 exports.reembed = async (req, res, next) => {
   const IN_PROGRESS = ['uploading', 'extracting', 'chunking', 'embedding', 'indexing', 'processing'];
   try {
-    const doc = await Document.findOne({ _id: req.params.id, companyId: req.companyId });
+    const doc = await Document.findOne({ _id: req.params.id, companyId: req.companyId, ...documentFilterFor(req.user) });
     if (!doc) return next(new AppError('Document not found.', 404));
     if (IN_PROGRESS.includes(doc.status)) {
       return next(new AppError('This document is already being processed.', 409));

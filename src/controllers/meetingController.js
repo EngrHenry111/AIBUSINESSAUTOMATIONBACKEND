@@ -1,5 +1,6 @@
 'use strict';
 
+const { uploadPrivate } = require('../utils/privateFiles');
 const fs = require('fs');
 const Meeting = require('../models/Meeting');
 const User = require('../models/User');
@@ -521,13 +522,12 @@ exports.uploadAttachment = async (req, res, next) => {
 
     let url;
     if (cloudinary) {
-      const r = await cloudinary.uploader.upload(req.file.path, {
+      const r = await uploadPrivate(req.file.path, {
         folder: `business-ai/${req.companyId}/meetings/${meeting._id}`,
-        resource_type: 'auto',
         use_filename: true,
       });
       fs.unlink(req.file.path, () => {});
-      url = r.secure_url;
+      url = r.url;
     } else {
       url = `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${req.file.path.split(/[\\/]/).pop()}`;
     }

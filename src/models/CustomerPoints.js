@@ -26,6 +26,12 @@ const customerPointsSchema = new mongoose.Schema({
   tier: { type: String, default: 'Bronze' },
   transactions: { type: [transactionSchema], default: [] },
   lastActivityAt: Date,
+  // One-time code emailed to the customer before a storefront checkout may
+  // show or spend these points — an email address alone proves nothing.
+  checkoutCode: {
+    type: { hash: String, expiresAt: Date, sentAt: Date, attempts: { type: Number, default: 0 } },
+    select: false,
+  },
 }, { timestamps: true });
 
 customerPointsSchema.index({ companyId: 1, customerEmail: 1 }, { unique: true });

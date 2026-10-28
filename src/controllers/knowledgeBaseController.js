@@ -1,5 +1,6 @@
 'use strict';
 
+const { documentFilterFor } = require('../utils/documentAccess');
 const KnowledgeBase = require('../models/KnowledgeBase');
 const Document = require('../models/Document');
 const DocumentChunk = require('../models/DocumentChunk');
@@ -34,7 +35,7 @@ exports.getKnowledgeBase = async (req, res, next) => {
     const kb = await KnowledgeBase.findOne({ _id: req.params.id, companyId: req.companyId });
     if (!kb) return next(new AppError('Knowledge base not found.', 404));
 
-    const documents = await Document.find({ knowledgeBaseId: kb._id, companyId: req.companyId, status: 'ready' })
+    const documents = await Document.find({ knowledgeBaseId: kb._id, companyId: req.companyId, status: 'ready', ...documentFilterFor(req.user) })
       .select('name fileType fileSize chunksCount createdAt uploadedBy')
       .populate('uploadedBy', 'name');
 

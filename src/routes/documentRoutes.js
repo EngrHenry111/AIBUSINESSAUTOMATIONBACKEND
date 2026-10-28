@@ -19,6 +19,7 @@ router.post('/upload', uploadLimiter, uploadDocument.single('file'), ctrl.upload
 router.post('/:id/reembed', ctrl.reembed);
 // Exposing a file to customers, or removing one, is a manager's call.
 router.patch('/:id/customer-facing', isManager, ctrl.setCustomerFacing);
+router.patch('/:id/access', isManager, ctrl.setManagersOnly);
 router.delete('/:id', isManager, ctrl.deleteDocument);
 
 module.exports = router;

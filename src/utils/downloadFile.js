@@ -51,6 +51,7 @@ async function downloadFile(filePathOrUrl, publicId) {
         '', // format — empty string keeps original
         {
           resource_type: 'raw',
+          type: /\/authenticated\//.test(filePathOrUrl || '') ? 'authenticated' : 'upload',
           expires_at: Math.floor(Date.now() / 1000) + 600, // 10 min
           attachment: false,
         }

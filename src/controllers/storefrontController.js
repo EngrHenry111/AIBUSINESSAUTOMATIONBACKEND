@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const Company = require('../models/Company');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
@@ -245,21 +247,90 @@ exports.getStoreCategories = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// ── GET /store/:slug/loyalty?email= ─────────────────────────────────
-// Public — lets the checkout page show "You have N points" before the
-// customer pays. No auth; only ever returns this one shopper's own balance.
+// ── Loyalty points at checkout ───────────────────────────────────────
+// Points are money, and anyone can type anyone's email. So the public
+// status call says only whether the store runs a programme; the balance is
+// shown — and can be spent — only after the shopper enters a 6-digit code
+// emailed to that address, which yields a short-lived loyalty token.
+const LOYALTY_CODE_MINUTES = 10;
+const LOYALTY_CODE_ATTEMPTS = 5;
+const LOYALTY_TOKEN_TTL = '30m';
+const hashCode = (code) => crypto.createHash('sha256').update(String(code)).digest('hex');
+
+function verifyLoyaltyToken(token, companyId, email) {
+  if (!token) return false;
+  try {
+    const d = jwt.verify(String(token), process.env.JWT_SECRET);
+    return d.type === 'loyalty_checkout' && String(d.companyId) === String(companyId) && d.email === email;
+  } catch { return false; }
+}
+
+// ── GET /store/:slug/loyalty ─────────────────────────────────────────
 exports.getStoreLoyaltyStatus = async (req, res, next) => {
   try {
     const company = await findStore(req.params.slug);
-    const email = String(req.query.email || '').trim().toLowerCase();
     const program = await LoyaltyProgram.findOne({ companyId: company._id });
+    if (!program?.enabled) return res.status(200).json({ success: true, data: { enabled: false } });
+    res.status(200).json({
+      success: true,
+      data: { enabled: true, nairaPerPoint: program.nairaPerPoint, minimumRedemption: program.minimumRedemption },
+    });
+  } catch (err) { next(err); }
+};
 
-    if (!program?.enabled || !email) {
-      return res.status(200).json({ success: true, data: { enabled: false, points: 0 } });
+// ── POST /store/:slug/loyalty/code { email } ─────────────────────────
+// Always answers the same way, so it can't be used to learn who shops here.
+exports.sendLoyaltyCode = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) return next(new AppError('Enter a valid email address.', 400));
+    const reply = () => res.status(200).json({ success: true, message: 'If this email has points here, a code is on its way.' });
+
+    const program = await LoyaltyProgram.findOne({ companyId: company._id });
+    if (!program?.enabled) return reply();
+    const record = await CustomerPoints.findOne({ companyId: company._id, customerEmail: email }).select('+checkoutCode currentPoints');
+    if (!record || record.currentPoints <= 0) return reply();
+    if (record.checkoutCode?.sentAt && Date.now() - record.checkoutCode.sentAt.getTime() < 60 * 1000) return reply();
+
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    record.checkoutCode = { hash: hashCode(code), expiresAt: new Date(Date.now() + LOYALTY_CODE_MINUTES * 60 * 1000), sentAt: new Date(), attempts: 0 };
+    await record.save();
+    emailService.send({
+      to: email,
+      subject: `${code} is your ${company.companyName} points code`,
+      html: emailService.baseTemplate('Your points code', `
+        <p style="color:#475569;font-size:14px;">Use this code at checkout to see and use your loyalty points at <strong>${company.companyName}</strong>:</p>
+        <p style="font-size:28px;font-weight:700;letter-spacing:6px;color:#0f172a;margin:12px 0;">${code}</p>
+        <p style="color:#64748b;font-size:13px;">It expires in ${LOYALTY_CODE_MINUTES} minutes. If you didn't ask for it, you can ignore this email — your points are safe.</p>
+      `, { name: company.companyName, logo: company.logo }),
+    }).catch(() => {});
+    reply();
+  } catch (err) { next(err); }
+};
+
+// ── POST /store/:slug/loyalty/verify { email, code } ─────────────────
+exports.verifyLoyaltyCode = async (req, res, next) => {
+  try {
+    const company = await findStore(req.params.slug);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const code = String(req.body.code || '').trim();
+    const wrong = () => next(new AppError('That code is wrong or has expired. Request a new one.', 400));
+
+    const program = await LoyaltyProgram.findOne({ companyId: company._id });
+    const record = program?.enabled && email
+      ? await CustomerPoints.findOne({ companyId: company._id, customerEmail: email }).select('+checkoutCode currentPoints')
+      : null;
+    const cc = record?.checkoutCode;
+    if (!cc?.hash || cc.expiresAt < new Date() || cc.attempts >= LOYALTY_CODE_ATTEMPTS) return wrong();
+    const ok = crypto.timingSafeEqual(Buffer.from(cc.hash), Buffer.from(hashCode(code)));
+    if (!ok) {
+      await CustomerPoints.updateOne({ _id: record._id }, { $inc: { 'checkoutCode.attempts': 1 } });
+      return wrong();
     }
+    await CustomerPoints.updateOne({ _id: record._id }, { $unset: { checkoutCode: 1 } });
 
-    const record = await CustomerPoints.findOne({ companyId: company._id, customerEmail: email });
-    const points = record?.currentPoints || 0;
+    const points = record.currentPoints || 0;
     res.status(200).json({
       success: true,
       data: {
@@ -268,6 +339,7 @@ exports.getStoreLoyaltyStatus = async (req, res, next) => {
         nairaPerPoint: program.nairaPerPoint,
         minimumRedemption: program.minimumRedemption,
         redeemableValue: points >= program.minimumRedemption ? Math.round(points * program.nairaPerPoint * 100) / 100 : 0,
+        loyaltyToken: jwt.sign({ type: 'loyalty_checkout', companyId: String(company._id), email }, process.env.JWT_SECRET, { expiresIn: LOYALTY_TOKEN_TTL }),
       },
     });
   } catch (err) { next(err); }
@@ -498,7 +570,7 @@ const PAYMENT_METHODS = ['paystack', 'pay_on_delivery', 'split_payment'];
 exports.initializeStorePayment = async (req, res, next) => {
   try {
     const {
-      items = [], customer = {}, redeemPoints = 0, couponCode, giftCardCode,
+      items = [], customer = {}, redeemPoints = 0, loyaltyToken, couponCode, giftCardCode,
       paymentMethod = 'paystack', shippingState, shippingCity, notes, cartSessionId,
     } = req.body;
     if (!PAYMENT_METHODS.includes(paymentMethod)) return next(new AppError('Invalid payment method.', 400));
@@ -550,6 +622,10 @@ exports.initializeStorePayment = async (req, res, next) => {
     if (requestedPoints > 0) {
       const program = await LoyaltyProgram.findOne({ companyId: company._id });
       const email = String(customer.email).trim().toLowerCase();
+      // Only the person who proved they own this email may spend its points.
+      if (!verifyLoyaltyToken(loyaltyToken, company._id, email)) {
+        return next(new AppError('Confirm your points code again before using points.', 400));
+      }
       const record = program?.enabled ? await CustomerPoints.findOne({ companyId: company._id, customerEmail: email }) : null;
 
       if (program?.enabled && record && requestedPoints >= program.minimumRedemption && record.currentPoints >= requestedPoints) {

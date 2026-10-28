@@ -23,6 +23,9 @@ router.get('/:slug/products/:id', ctrl.getStoreProduct);
 router.post('/:slug/products/:id/review', ctrl.addProductReview);
 router.get('/:slug/categories', ctrl.getStoreCategories);
 router.get('/:slug/loyalty', ctrl.getStoreLoyaltyStatus);
+// The balance needs a code emailed to the shopper; authLimiter caps guessing.
+router.post('/:slug/loyalty/code', authLimiter, ctrl.sendLoyaltyCode);
+router.post('/:slug/loyalty/verify', authLimiter, ctrl.verifyLoyaltyCode);
 router.post('/:slug/cart/save', ctrl.saveAbandonedCart);
 router.get('/:slug/cart/recover/:sessionId', ctrl.recoverCart);
 router.get('/:slug/products/:id/recommendations', ctrl.getRecommendations);
