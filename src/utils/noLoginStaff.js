@@ -1,8 +1,8 @@
 'use strict';
 
 // Staff who are on the books but never sign in (no phone, no email): they
-// are ordinary User records so classes, timetables and payroll treat them
-// like anyone else, with `noLogin: true` shutting the door on the account.
+// are ordinary User records so classes and timetables treat them like
+// anyone else, with `noLogin: true` shutting the door on the account.
 // User.email is required and unique, so each gets a placeholder on the
 // reserved .invalid domain, which can never reach a real inbox.
 
