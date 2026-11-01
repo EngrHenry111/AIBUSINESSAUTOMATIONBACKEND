@@ -72,6 +72,10 @@ const referralRoutes = require('./routes/referralRoutes');
 
 const app = express();
 
+// Don't advertise the framework. Helmet removes this too, but this holds for
+// any response that doesn't pass through it.
+app.disable('x-powered-by');
+
 // ─── Proxy Trust ─────────────────────────────────────────────────────────────
 // Render / Vercel / any host that terminates TLS in front of us. Required for
 // secure cookies, correct req.ip (rate limiting), and req.protocol.
