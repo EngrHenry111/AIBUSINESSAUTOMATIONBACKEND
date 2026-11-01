@@ -15,6 +15,7 @@ const Ward = require('../models/Ward');
 const User = require('../models/User');
 const { AppError } = require('../middleware/errorMiddleware');
 const { pick } = require('../utils/pick');
+const { storeBrandImage } = require('../utils/brandImage');
 const { seesClinical, MANAGER_ROLES } = require('../utils/hospitalAccess');
 const {
   round2, oid, escapeRe, todayStr, getSettings, nextNumber, emitHospital, createBill, addCharges,
@@ -43,6 +44,18 @@ const list = (v, max = 30) => [...new Set((Array.isArray(v) ? v : String(v || ''
 exports.getSettings = async (req, res, next) => {
   try {
     res.status(200).json({ success: true, data: await getSettings(req.companyId) });
+  } catch (err) { next(err); }
+};
+
+// POST /hospital/settings/logo (multipart, field "logo") — saves it straight
+// away, like the company logo in Settings.
+exports.uploadLogo = async (req, res, next) => {
+  try {
+    if (!req.file) return next(new AppError('Choose an image to upload.', 400));
+    const settings = await getSettings(req.companyId);
+    settings.logo = await storeBrandImage(req);
+    await settings.save();
+    res.status(200).json({ success: true, data: { logo: settings.logo } });
   } catch (err) { next(err); }
 };
 

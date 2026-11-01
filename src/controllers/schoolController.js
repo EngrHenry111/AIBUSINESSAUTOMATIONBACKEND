@@ -13,7 +13,10 @@ const emailService = require('../services/emailService');
 const { AppError } = require('../middleware/errorMiddleware');
 const { pick } = require('../utils/pick');
 const SchoolStaff = require('../models/SchoolStaff');
-const { isTeacher, assertClassAccess, classFilterFor } = require('../utils/schoolAccess');
+const { isTeacher, assertClassAccess, classFilterFor, teachingScope } = require('../utils/schoolAccess');
+const { placeholderEmail, unusablePassword } = require('../utils/noLoginStaff');
+const { storeBrandImage } = require('../utils/brandImage');
+const { writeAuditLog } = require('../utils/auditLog');
 const logger = require('../utils/logger');
 const {
   TERMS, oid, escapeRe, slugify, getSettings, nextNumber, reserveNumbers, formatNumber,
@@ -593,19 +596,23 @@ exports.renumberRegNumbers = async (req, res, next) => {
 // subjects they teach (drives the menu and teacher home screen).
 exports.getMe = async (req, res, next) => {
   try {
-    const me = String(req.user._id);
-    const classes = await SchoolClass.find({ companyId: req.companyId, $or: [{ classTeacher: req.user._id }, { 'subjectTeachers.teacher': req.user._id }] })
-      .sort({ level: 1, name: 1 }).select('name classTeacher subjectTeachers subjects').lean();
+    const { classes, people, helping } = await teachingScope(req.companyId, req.user._id);
+    const helped = helping.size ? await User.find({ _id: { $in: [...helping] }, companyId: req.companyId }).select('name').lean() : [];
+    const nameOf = new Map(helped.map((u) => [String(u._id), u.name]));
     res.status(200).json({
       success: true,
       data: {
         role: req.school.role,
         manager: req.school.manager,
-        teaching: classes.map((c) => ({
-          _id: c._id, name: c.name,
-          classTeacher: String(c.classTeacher) === me,
-          subjects: String(c.classTeacher) === me ? c.subjects : (c.subjectTeachers || []).filter((st) => String(st.teacher) === me).map((st) => st.subject),
-        })),
+        teaching: classes.map((c) => {
+          const classTeacher = people.has(String(c.classTeacher));
+          const subjectRows = (c.subjectTeachers || []).filter((st) => people.has(String(st.teacher)));
+          return {
+            _id: c._id, name: c.name, classTeacher,
+            subjects: classTeacher ? c.subjects : subjectRows.map((st) => st.subject),
+            helpingFor: [...new Set([c.classTeacher, ...subjectRows.map((st) => st.teacher)].map((id) => nameOf.get(String(id))).filter(Boolean))],
+          };
+        }),
       },
     });
   } catch (err) { next(err); }
@@ -615,18 +622,20 @@ exports.getMe = async (req, res, next) => {
 exports.getStaff = async (req, res, next) => {
   try {
     const [users, roles, classes] = await Promise.all([
-      User.find({ companyId: req.companyId, status: { $ne: 'deleted' }, role: { $ne: 'customer' } }).select('name email role status').sort({ name: 1 }).lean(),
+      User.find({ companyId: req.companyId, status: { $ne: 'deleted' }, role: { $ne: 'customer' } }).select('name email phone role status noLogin').sort({ name: 1 }).lean(),
       SchoolStaff.find({ companyId: req.companyId }).lean(),
       SchoolClass.find({ companyId: req.companyId }).select('name classTeacher subjectTeachers').lean(),
     ]);
     const roleOf = new Map(roles.map((r) => [String(r.userId), r.role]));
+    const helperOf = new Map(roles.filter((r) => r.helperId).map((r) => [String(r.userId), r.helperId]));
     res.status(200).json({
       success: true,
       data: users.map((u) => {
         const id = String(u._id);
         const fullAccess = ['manager', 'company_owner', 'super_admin'].includes(u.role);
         return {
-          _id: u._id, name: u.name, email: u.email, accountRole: u.role, status: u.status,
+          _id: u._id, name: u.name, email: u.noLogin ? null : u.email, phone: u.noLogin ? u.phone : undefined,
+          accountRole: u.role, status: u.status, noLogin: Boolean(u.noLogin), helperId: helperOf.get(id) || null,
           schoolRole: fullAccess ? 'owner' : (roleOf.get(id) || null),
           classTeacherOf: classes.filter((c) => String(c.classTeacher) === id).map((c) => c.name),
           teaches: classes.flatMap((c) => (c.subjectTeachers || []).filter((st) => String(st.teacher) === id).map((st) => `${st.subject} (${c.name})`)),
@@ -641,10 +650,11 @@ exports.setStaffRole = async (req, res, next) => {
   try {
     const { userId } = req.params;
     if (!mongoose.isValidObjectId(userId)) return next(new AppError('Team member not found.', 404));
-    const user = await User.findOne({ _id: userId, companyId: req.companyId }).select('role').lean();
+    const user = await User.findOne({ _id: userId, companyId: req.companyId }).select('role noLogin').lean();
     if (!user) return next(new AppError('Team member not found.', 404));
     if (['manager', 'company_owner', 'super_admin'].includes(user.role)) return next(new AppError('Owners and managers always have full access.', 400));
     const { role } = req.body;
+    if (user.noLogin && !role) return next(new AppError('Staff with no login need a role.', 400));
     if (role == null || role === '') {
       await SchoolStaff.deleteOne({ companyId: req.companyId, userId });
     } else {
@@ -653,6 +663,70 @@ exports.setStaffRole = async (req, res, next) => {
     }
     emitSchool(io(req), req.companyId, 'staff', { userId });
     res.status(200).json({ success: true, data: { userId, role: role || null } });
+  } catch (err) { next(err); }
+};
+
+// The helper must be able to sign in and to do the work: a bursar has no
+// access to classes or scores, however many colleagues they're linked to.
+async function resolveHelper(companyId, helperId) {
+  if (!helperId) return null;
+  if (!mongoose.isValidObjectId(helperId)) throw new AppError('Colleague not found.', 404);
+  const helper = await User.findOne({ _id: helperId, companyId, status: 'active', noLogin: { $ne: true }, role: { $ne: 'customer' } }).select('_id').lean();
+  if (!helper) throw new AppError('Choose a colleague who can sign in.', 400);
+  const staff = await SchoolStaff.findOne({ companyId, userId: helper._id }).select('role').lean();
+  if (staff?.role === 'bursar') throw new AppError("A bursar can't enter scores. Choose a teacher or admin.", 400);
+  return helper._id;
+}
+
+// POST /school/staff { name, phone?, role?, helperId? } — someone who works
+// at the school but won't use the platform: no invite, no login, no seat.
+exports.addStaff = async (req, res, next) => {
+  try {
+    const name = String(req.body.name || '').trim().slice(0, 100);
+    if (name.length < 2) return next(new AppError("Enter the staff member's name.", 400));
+    const role = req.body.role || 'teacher';
+    if (!['admin', 'bursar', 'teacher'].includes(role)) return next(new AppError('Role must be admin, bursar or teacher.', 400));
+    const helperId = await resolveHelper(req.companyId, req.body.helperId);
+
+    const user = await User.create({
+      name, phone: String(req.body.phone || '').trim().slice(0, 40) || undefined,
+      email: placeholderEmail(), password: unusablePassword(),
+      role: 'employee', companyId: req.companyId, status: 'active', noLogin: true,
+      cardSettings: { enabled: false },
+    });
+    await SchoolStaff.create({ companyId: req.companyId, userId: user._id, role, ...(helperId && { helperId }) });
+
+    await writeAuditLog({
+      companyId: req.companyId, userId: req.user._id, action: 'user.invite', resource: 'User', resourceId: user._id,
+      description: `Added ${name} as school staff with no login`, ip: req.ip,
+    });
+    emitSchool(io(req), req.companyId, 'staff', { userId: user._id });
+    res.status(201).json({ success: true, data: { _id: user._id, name: user.name } });
+  } catch (err) { next(err); }
+};
+
+// PUT /school/staff/:userId/helper { helperId | null }
+exports.setStaffHelper = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    if (!mongoose.isValidObjectId(userId)) return next(new AppError('Team member not found.', 404));
+    const user = await User.findOne({ _id: userId, companyId: req.companyId, noLogin: true }).select('_id').lean();
+    if (!user) return next(new AppError('Team member not found.', 404));
+    const helperId = await resolveHelper(req.companyId, req.body.helperId);
+    await SchoolStaff.updateOne({ companyId: req.companyId, userId }, helperId ? { $set: { helperId } } : { $unset: { helperId: 1 } });
+    emitSchool(io(req), req.companyId, 'staff', { userId });
+    res.status(200).json({ success: true, data: { userId, helperId } });
+  } catch (err) { next(err); }
+};
+
+// POST /school/settings/logo (multipart, field "logo") — saves it straight
+// away, like the company logo in Settings.
+exports.uploadLogo = async (req, res, next) => {
+  try {
+    if (!req.file) return next(new AppError('Choose an image to upload.', 400));
+    const logo = await storeBrandImage(req);
+    await SchoolSettings.updateOne({ companyId: req.companyId }, { $set: { logo } });
+    res.status(200).json({ success: true, data: { logo } });
   } catch (err) { next(err); }
 };
 

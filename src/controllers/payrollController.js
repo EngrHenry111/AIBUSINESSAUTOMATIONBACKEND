@@ -6,6 +6,7 @@ const Expense = require('../models/Expense');
 const Company = require('../models/Company');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
+const { isPlaceholderEmail } = require('../utils/noLoginStaff');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
 
@@ -348,7 +349,7 @@ exports.generatePayslip = async (req, res, next) => {
     <h4>Employee</h4>
     <p><strong>${esc(employee.name)}</strong></p>
     ${employee.role ? `<p>${esc(employee.role)}</p>` : ''}
-    ${employee.email ? `<p>${esc(employee.email)}</p>` : ''}
+    ${employee.email && !isPlaceholderEmail(employee.email) ? `<p>${esc(employee.email)}</p>` : ''}
   </div>
   <div class="info-block" style="text-align:right">
     <h4>Payment Details</h4>

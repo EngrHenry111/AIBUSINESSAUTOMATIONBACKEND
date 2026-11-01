@@ -7,6 +7,7 @@ const Order = require('../models/Order');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
 const { cloudinary } = require('../config/cloudinary');
+const { storeBrandImage } = require('../utils/brandImage');
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -48,19 +49,7 @@ exports.updateCompany = async (req, res, next) => {
 
     // Logo upload (multipart, field name "logo") → Cloudinary, matching how
     // product images / the store banner are handled elsewhere.
-    if (req.file) {
-      if (cloudinary) {
-        const r = await cloudinary.uploader.upload(req.file.path, {
-          folder: `business-ai/${req.companyId}/branding`,
-          resource_type: 'image',
-          transformation: [{ width: 500, height: 500, crop: 'limit' }],
-        });
-        fs.unlink(req.file.path, () => {});
-        company.logo = r.secure_url;
-      } else {
-        company.logo = `${(process.env.API_URL || '').replace(/\/+$/, '')}/uploads/temp/${req.file.path.split(/[\\/]/).pop()}`;
-      }
-    }
+    if (req.file) company.logo = await storeBrandImage(req);
 
     await company.save();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'company.update', ip: req.ip });

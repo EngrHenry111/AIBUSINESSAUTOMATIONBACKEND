@@ -8,8 +8,10 @@
 //   classIds: Set of class ids a teacher may see (class teacher or subject teacher),
 //   classTeacherOf: Set of class ids they are class teacher of,
 //   subjects: Map classId -> Set of subjects they teach there,
+//   helping: Set of no-login staff ids whose work they do,
 // }
-// Only teachers are scoped; admins and bursars see every class.
+// Only teachers are scoped; admins and bursars see every class. A teacher
+// helping a colleague with no login gets that colleague's classes too.
 
 const mongoose = require('mongoose');
 const SchoolStaff = require('../models/SchoolStaff');
@@ -17,6 +19,17 @@ const SchoolClass = require('../models/SchoolClass');
 const { AppError } = require('../middleware/errorMiddleware');
 
 const MANAGER_ROLES = ['manager', 'company_owner', 'super_admin'];
+
+// The classes a person teaches, counting anyone they help as their own.
+async function teachingScope(companyId, userId) {
+  const helped = await SchoolStaff.find({ companyId, helperId: userId }).select('userId').lean();
+  const people = [userId, ...helped.map((h) => h.userId)];
+  const classes = await SchoolClass.find({
+    companyId,
+    $or: [{ classTeacher: { $in: people } }, { 'subjectTeachers.teacher': { $in: people } }],
+  }).sort({ level: 1, name: 1 }).select('name classTeacher subjectTeachers subjects').lean();
+  return { classes, people: new Set(people.map(String)), helping: new Set(helped.map((h) => String(h.userId))) };
+}
 
 async function loadSchoolRole(req, res, next) {
   try {
@@ -29,16 +42,13 @@ async function loadSchoolRole(req, res, next) {
     const role = staff?.role || 'admin';
     req.school = { role, manager: false };
     if (role === 'teacher') {
-      const classes = await SchoolClass.find({
-        companyId: req.companyId,
-        $or: [{ classTeacher: req.user._id }, { 'subjectTeachers.teacher': req.user._id }],
-      }).select('classTeacher subjectTeachers').lean();
-      const me = String(req.user._id);
+      const { classes, people, helping } = await teachingScope(req.companyId, req.user._id);
+      req.school.helping = helping;
       req.school.classIds = new Set(classes.map((c) => String(c._id)));
-      req.school.classTeacherOf = new Set(classes.filter((c) => String(c.classTeacher) === me).map((c) => String(c._id)));
+      req.school.classTeacherOf = new Set(classes.filter((c) => people.has(String(c.classTeacher))).map((c) => String(c._id)));
       req.school.subjects = new Map(classes.map((c) => [
         String(c._id),
-        new Set((c.subjectTeachers || []).filter((st) => String(st.teacher) === me).map((st) => st.subject)),
+        new Set((c.subjectTeachers || []).filter((st) => people.has(String(st.teacher))).map((st) => st.subject)),
       ]));
     }
     next();
@@ -80,4 +90,4 @@ function classFilterFor(req, requested) {
   return { $in: [...req.school.classIds].map((id) => new mongoose.Types.ObjectId(id)) };
 }
 
-module.exports = { loadSchoolRole, allow, isTeacher, assertClassAccess, assertSubjectAccess, classFilterFor, MANAGER_ROLES };
+module.exports = { loadSchoolRole, teachingScope, allow, isTeacher, assertClassAccess, assertSubjectAccess, classFilterFor, MANAGER_ROLES };

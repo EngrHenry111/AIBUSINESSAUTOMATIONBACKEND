@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const User = require('../models/User');
 const Company = require('../models/Company');
+const SchoolStaff = require('../models/SchoolStaff');
 const { cloudinary } = require('../config/cloudinary');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
@@ -148,7 +149,7 @@ exports.inviteMember = async (req, res, next) => {
     if (roleError) return next(new AppError(roleError.message, roleError.statusCode));
 
     const company = await Company.findById(req.companyId).select('limits companyName');
-    const currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active' });
+    const currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active', noLogin: { $ne: true } });
 
     // maxUsers of -1 means unlimited (Enterprise) — without this guard a
     // negative limit would make currentCount >= maxUsers true immediately
@@ -186,7 +187,7 @@ exports.bulkInviteMembers = async (req, res, next) => {
     if (members.length > 100) return next(new AppError('Invite up to 100 members at a time.', 400));
 
     const company = await Company.findById(req.companyId).select('limits companyName');
-    let currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active' });
+    let currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active', noLogin: { $ne: true } });
 
     const results = [];
     for (const raw of members) {
@@ -234,8 +235,9 @@ exports.bulkInviteMembers = async (req, res, next) => {
 // an account that's already active and in use.
 exports.resendInvite = async (req, res, next) => {
   try {
-    const member = await User.findOne({ _id: req.params.id, companyId: req.companyId }).select('name email role lastLogin');
+    const member = await User.findOne({ _id: req.params.id, companyId: req.companyId }).select('name email role lastLogin noLogin');
     if (!member) return next(new AppError('Team member not found.', 404));
+    if (member.noLogin) return next(new AppError('This staff member has no login, so there is no invite to send.', 400));
     if (member.lastLogin) return next(new AppError('This member has already logged in — resend only applies to a pending invite.', 400));
 
     const company = await Company.findById(req.companyId).select('companyName');
@@ -320,6 +322,11 @@ exports.removeMember = async (req, res, next) => {
     const member = await User.findOneAndUpdate(
       { _id: req.params.id, companyId: req.companyId },
       { status: 'inactive' }, { new: true }
+    );
+    // Ends any "colleague who helps" link, in either direction.
+    await SchoolStaff.updateMany(
+      { companyId: req.companyId, $or: [{ userId: req.params.id }, { helperId: req.params.id }] },
+      { $unset: { helperId: 1 } },
     );
 
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'user.remove', resource: 'User', resourceId: req.params.id, ip: req.ip });

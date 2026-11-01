@@ -133,7 +133,7 @@ exports.getTeacherTimetable = async (req, res, next) => {
   try {
     const userId = req.params.userId === 'me' ? String(req.user._id) : req.params.userId;
     if (!mongoose.isValidObjectId(userId)) return next(new AppError('Teacher not found.', 404));
-    if (req.school.role === 'teacher' && userId !== String(req.user._id)) return next(new AppError('You can only view your own timetable.', 403));
+    if (req.school.role === 'teacher' && userId !== String(req.user._id) && !req.school.helping?.has(userId)) return next(new AppError('You can only view your own timetable.', 403));
     const { settings, session, term } = await period(req);
     const teacher = await User.findOne({ _id: userId, companyId: req.companyId }).select('name').lean();
     if (!teacher) return next(new AppError('Teacher not found.', 404));

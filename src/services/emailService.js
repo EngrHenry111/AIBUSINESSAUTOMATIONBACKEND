@@ -8,6 +8,7 @@
 // straight to https://api.resend.com/emails.
 const axios = require('axios');
 const logger = require('../utils/logger');
+const { isPlaceholderEmail } = require('../utils/noLoginStaff');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM = process.env.EMAIL_FROM || 'BizlyAI <noreply@bislyai.com>';
@@ -436,6 +437,8 @@ async function sendEmail({ to, subject, html, text, attachments, replyTo, cc }) 
     logger.warn('RESEND_API_KEY not set — email skipped');
     return null;
   }
+  // Staff with no login have a placeholder address; there is no inbox.
+  if ([].concat(to).every(isPlaceholderEmail)) return null;
 
   try {
     console.log(`Attempting to send email to: ${to} | Subject: ${subject} | From: ${FROM}`);

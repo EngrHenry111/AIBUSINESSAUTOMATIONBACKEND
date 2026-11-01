@@ -250,7 +250,7 @@ exports.getUsage = async (req, res, next) => {
         { $count: 'n' },
       ]),
       Document.countDocuments({ companyId, status: { $ne: 'failed' } }),
-      User.countDocuments({ companyId, status: 'active' }),
+      User.countDocuments({ companyId, status: 'active', noLogin: { $ne: true } }),
     ]);
 
     const meter = (used, limit) => {

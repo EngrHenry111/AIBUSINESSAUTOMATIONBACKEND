@@ -82,7 +82,7 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email }).select('+password +refreshToken');
-    if (!user) {
+    if (!user || user.noLogin) {
       securityLogger.logFailedLogin(email, req.ip);
       await recordFailedLogin(req.ip, email);
       return next(new AppError('Invalid email or password.', 401));
@@ -193,7 +193,7 @@ exports.forgotPassword = async (req, res, next) => {
     const { email } = req.body;
     const successMsg = 'If that email exists, a reset link has been sent. Check your inbox.';
     const user = await User.findOne({ email });
-    if (!user) return res.status(200).json({ success: true, message: successMsg });
+    if (!user || user.noLogin) return res.status(200).json({ success: true, message: successMsg });
 
     const { token, hash } = generateResetToken();
     user.passwordResetToken = hash;

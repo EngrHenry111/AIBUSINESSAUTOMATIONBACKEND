@@ -27,6 +27,9 @@ const userSchema = new mongoose.Schema({
   // can do; department is just which team they're on. See utils/departments.
   department: { type: String, trim: true, maxlength: 60, default: null },
   status: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
+  // Staff record with no account behind it — can never sign in and doesn't
+  // use a plan seat. See utils/noLoginStaff.
+  noLogin: { type: Boolean, default: false },
   refreshToken: { type: String, select: false },
   passwordResetToken: { type: String, select: false },
   passwordResetExpires: { type: Date, select: false },
