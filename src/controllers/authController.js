@@ -27,10 +27,12 @@ const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 const securityLogger = require('../utils/securityLogger');
 const { recordFailedLogin } = require('../utils/suspiciousActivity');
+const { assertPermanentEmail } = require('../utils/disposableEmail');
 
 exports.register = async (req, res, next) => {
   try {
     const { name, email, password, companyName, industry, phone, ref } = req.body;
+    assertPermanentEmail(email);
     const existingUser = await User.findOne({ email });
     if (existingUser) return next(new AppError('Email already registered.', 409));
 

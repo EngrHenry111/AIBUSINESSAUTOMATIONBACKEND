@@ -10,6 +10,7 @@ const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 const { AppError } = require('../middleware/errorMiddleware');
 const { generateStoreCustomerToken } = require('../middleware/storeCustomerAuth');
+const { assertPermanentEmail } = require('../utils/disposableEmail');
 const { generateResetToken } = require('../utils/generateTokens');
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
@@ -44,6 +45,7 @@ exports.registerStoreCustomer = async (req, res, next) => {
     if (!name?.trim() || !EMAIL_RE.test(cleanEmail) || !password || password.length < 6) {
       return next(new AppError('Name, a valid email and a password of at least 6 characters are required.', 400));
     }
+    assertPermanentEmail(cleanEmail);
 
     const existing = await StoreCustomer.findOne({ companyId: req.store._id, email: cleanEmail });
     if (existing) return next(new AppError('An account with this email already exists. Try logging in instead.', 409));

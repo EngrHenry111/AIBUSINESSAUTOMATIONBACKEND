@@ -7,9 +7,9 @@ const logger = require('./logger');
 
 const DEFAULT_TIERS = [
   { name: 'Bronze', minimumPoints: 0, benefits: 'Welcome perks and birthday rewards', badgeColor: '#cd7f32', discountPercent: 0 },
-  { name: 'Silver', minimumPoints: 500, benefits: 'Early access to sales and promos', badgeColor: '#c0c0c0', discountPercent: 2 },
-  { name: 'Gold', minimumPoints: 2000, benefits: 'Priority support and bigger discounts', badgeColor: '#ffd700', discountPercent: 5 },
-  { name: 'Platinum', minimumPoints: 5000, benefits: 'VIP treatment and exclusive offers', badgeColor: '#e5e4e2', discountPercent: 10 },
+  { name: 'Silver', minimumPoints: 500, benefits: 'Early access to sales and promos', badgeColor: '#c0c0c0', discountPercent: 0.5 },
+  { name: 'Gold', minimumPoints: 2000, benefits: 'Priority support and bigger discounts', badgeColor: '#ffd700', discountPercent: 1 },
+  { name: 'Platinum', minimumPoints: 5000, benefits: 'VIP treatment and exclusive offers', badgeColor: '#e5e4e2', discountPercent: 2 },
 ];
 
 function resolveTier(points, tiers) {

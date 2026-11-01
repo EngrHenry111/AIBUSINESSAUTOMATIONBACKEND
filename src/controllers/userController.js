@@ -13,6 +13,7 @@ const { generateAccessToken, generateRefreshToken, generateResetToken, setTokenC
 const logger = require('../utils/logger');
 const emailService = require('../services/emailService');
 const { DEFAULT_DEPARTMENTS } = require('../utils/departments');
+const { assertPermanentEmail } = require('../utils/disposableEmail');
 
 const clientUrl = () => (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
 
@@ -119,6 +120,7 @@ function canInviteAs(inviterRole, role) {
 // statusCode} on validation failure rather than calling next() itself, so
 // callers can decide how to report a single failure within a batch.
 async function createInvitedUser({ companyId, name, email, role, inviter, companyName }) {
+  assertPermanentEmail(email);
   const existing = await User.findOne({ email });
   if (existing) { const e = new Error('Email already registered.'); e.statusCode = 409; throw e; }
 
