@@ -240,6 +240,7 @@ app.use(`${API}/chat`, chatRoutes);
 app.use(`${API}/leads`, leadRoutes);
 app.use(`${API}/meetings`, meetingRoutes);
 app.use(`${API}/invoices`, invoiceRoutes);
+app.use(`${API}/pay`, require('./routes/payRoutes'));
 app.use(`${API}/orders`, orderRoutes);
 app.use(`${API}/products`, productRoutes);
 app.use(`${API}/customers`, customerRoutes);

@@ -15,6 +15,9 @@ const { currencyFieldsFor, formatCurrency } = require('../services/currencyServi
 const { pick } = require('../utils/pick');
 const { createWithNumber } = require('../utils/invoiceNumbers');
 const { syncOrderFromInvoice } = require('../utils/orderInvoice');
+const {
+  round2, balanceOf, moneyOf, canPayOnline, payLink, applyInvoicePayment,
+} = require('../utils/invoicePayments');
 
 // findOneAndUpdate({...}, req.body) used to pass the raw body straight
 // through with zero filtering — a client could set companyId (moving the
@@ -24,7 +27,7 @@ const { syncOrderFromInvoice } = require('../utils/orderInvoice');
 // stay correct), among others.
 const INVOICE_EDITABLE_FIELDS = [
   'customer', 'items', 'subtotal', 'tax', 'discount', 'total', 'currency',
-  'status', 'dueAt', 'notes',
+  'status', 'dueAt', 'notes', 'remindersPaused',
 ];
 
 // Award loyalty points once an invoice is marked paid, then text the
@@ -52,6 +55,7 @@ async function awardLoyaltyForInvoice(invoice, companyId) {
     message: `Hi ${invoice.customer.name}, you earned ${points} points on invoice ${invoice.invoiceNumber}! Total: ${record.currentPoints} points. Redeem at ${storeLink}. - ${company?.companyName || ''}`.trim(),
   }).catch(() => {});
 }
+exports.awardLoyaltyForInvoice = awardLoyaltyForInvoice;
 
 const clientUrl = () =>
   (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
@@ -257,8 +261,21 @@ exports.updateInvoice = async (req, res, next) => {
     if (!invoice) return next(new AppError('Invoice not found.', 404));
 
     if (justPaid) {
+      // Setting the status to Paid by hand means the rest has come in.
+      const gap = round2(invoice.total - (invoice.amountPaid || 0));
+      if (gap > 0) {
+        invoice.payments.push({ amount: gap, method: 'marked_paid', note: 'Marked as paid', recordedBy: req.user._id });
+        invoice.amountPaid = round2((invoice.amountPaid || 0) + gap);
+        await invoice.save();
+      }
       awardLoyaltyForInvoice(invoice, req.companyId).catch(() => {});
       syncOrderFromInvoice(invoice).catch(() => {});
+    } else if (before.status === 'paid' && invoice.status !== 'paid' && invoice.payments.some((p) => p.method === 'marked_paid')) {
+      // Undo of a mistaken "Paid": take back only what that click added.
+      invoice.payments = invoice.payments.filter((p) => p.method !== 'marked_paid');
+      invoice.amountPaid = round2(invoice.payments.reduce((s, p) => s + p.amount, 0));
+      invoice.paidAt = undefined;
+      await invoice.save();
     }
     // A cancelled matter invoice gives its time/disbursements back so they
     // can be billed again.
@@ -277,6 +294,8 @@ exports.draftReminder = async (req, res, next) => {
 
     const company = await Company.findById(req.companyId).select(COMPANY_BRANDING_FIELDS);
     const bank = bankDetailsBlock(company);
+    const balance = balanceOf(invoice);
+    const url = canPayOnline(company, invoice) ? await payLink(invoice) : null;
 
     const daysOverdue = Math.floor((Date.now() - new Date(invoice.dueAt)) / (1000 * 60 * 60 * 24));
     const tone = daysOverdue <= 0 ? 'friendly reminder' : daysOverdue <= 14 ? 'firm but professional' : 'urgent and escalated';
@@ -286,12 +305,15 @@ exports.draftReminder = async (req, res, next) => {
 Invoice Details:
 - Invoice Number: ${invoice.invoiceNumber}
 - Customer: ${invoice.customer.name}
-- Amount: ${invoice.total} ${invoice.currency}
-- Due Date: ${new Date(invoice.dueAt).toDateString()}
+- Amount still due: ${moneyOf(balance, invoice.currency)}${invoice.amountPaid > 0 ? ` (of ${moneyOf(invoice.total, invoice.currency)}; ${moneyOf(invoice.amountPaid, invoice.currency)} already paid)` : ''}
+- Due Date: ${day(invoice.dueAt)}
 - Days Overdue: ${daysOverdue > 0 ? daysOverdue : 'Not yet due'}
 - Status: ${invoice.status}
 - Sent from: ${company?.companyName || 'our business'}
-${bank ? `
+${url ? `
+The customer can pay online by card, bank transfer or USSD at this link. Include it exactly as written:
+${url}
+` : ''}${bank ? `
 The business bank details are:
 Bank: ${bank.bankName}
 Account Name: ${bank.accountName}
@@ -313,14 +335,67 @@ Write a complete, professional email with subject line and body.`;
 
 exports.getOverdueInvoices = async (req, res, next) => {
   try {
+    // 'overdue' too: the reminder job moves invoices into that status.
     const overdue = await Invoice.find({
       companyId: req.companyId,
-      status: { $in: ['sent', 'viewed', 'partial'] },
+      status: { $in: ['sent', 'viewed', 'partial', 'overdue'] },
       dueAt: { $lt: new Date() },
     }).sort({ dueAt: 1 });
 
-    const totalOutstanding = overdue.reduce((sum, inv) => sum + inv.total, 0);
+    const totalOutstanding = round2(overdue.reduce((sum, inv) => sum + balanceOf(inv), 0));
     res.status(200).json({ success: true, data: overdue, totalOutstanding });
+  } catch (err) { next(err); }
+};
+
+const PAYMENT_METHODS = ['bank_transfer', 'cash', 'pos', 'other'];
+
+// POST /invoices/:id/payments { amount, method, note?, paidAt? } — money
+// received outside Paystack. Part-payments leave the invoice "partial".
+exports.recordPayment = async (req, res, next) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId }).select('status total amountPaid');
+    if (!invoice) return next(new AppError('Invoice not found.', 404));
+    if (invoice.status === 'cancelled') return next(new AppError('This invoice is cancelled.', 400));
+    const balance = balanceOf(invoice);
+    const amount = round2(req.body.amount);
+    if (balance <= 0) return next(new AppError('This invoice is already fully paid.', 400));
+    if (!(amount > 0)) return next(new AppError('Enter the amount received.', 400));
+    if (amount > balance) return next(new AppError(`The most left to pay on this invoice is ${moneyOf(balance)}.`, 400));
+    const method = PAYMENT_METHODS.includes(req.body.method) ? req.body.method : 'bank_transfer';
+    const paidAt = req.body.paidAt ? new Date(req.body.paidAt) : new Date();
+    if (Number.isNaN(paidAt.getTime()) || paidAt > new Date(Date.now() + 60 * 1000)) return next(new AppError('Choose a valid payment date.', 400));
+
+    const { invoice: updated } = await applyInvoicePayment(invoice._id, req.companyId, {
+      amount, method, note: String(req.body.note || '').trim().slice(0, 300) || undefined, paidAt, userId: req.user._id,
+    });
+    res.status(201).json({ success: true, data: updated });
+  } catch (err) { next(err); }
+};
+
+// GET /invoices/:id/pay-link — the customer's pay page, to share by hand.
+exports.getPayLink = async (req, res, next) => {
+  try {
+    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId });
+    if (!invoice) return next(new AppError('Invoice not found.', 404));
+    if (balanceOf(invoice) <= 0) return next(new AppError('This invoice has nothing left to pay.', 400));
+    // The page only opens once an invoice has gone out; sharing it is that.
+    if (invoice.status === 'draft') {
+      invoice.status = 'sent';
+      invoice.sentAt = invoice.sentAt || new Date();
+      await invoice.save();
+    }
+    const company = await Company.findById(req.companyId).select('paymentSettings');
+    res.status(200).json({ success: true, data: { url: await payLink(invoice), canPayOnline: canPayOnline(company, invoice), invoice } });
+  } catch (err) { next(err); }
+};
+
+// PATCH /invoices/settings/reminders { enabled } — automatic overdue
+// reminders for the whole business.
+exports.updateReminderSettings = async (req, res, next) => {
+  try {
+    const enabled = req.body.enabled !== false;
+    await Company.updateOne({ _id: req.companyId }, { $set: { 'invoiceReminders.enabled': enabled } });
+    res.status(200).json({ success: true, data: { enabled } });
   } catch (err) { next(err); }
 };
 
@@ -456,6 +531,9 @@ function invoiceDocumentHtml(invoice, company) {
     ${invoice.tax ? `<div class="total-row"><span>Tax</span><span>${invoice.currency} ${Number(invoice.tax).toLocaleString()}</span></div>` : ''}
     ${invoice.discount ? `<div class="total-row"><span>Discount</span><span>-${invoice.currency} ${Number(invoice.discount).toLocaleString()}</span></div>` : ''}
     <div class="total-final"><span>Total</span><span>${invoice.currency} ${Number(invoice.total).toLocaleString()}</span></div>
+    ${invoice.amountPaid > 0 && invoice.status !== 'paid' ? `
+    <div class="total-row"><span>Paid</span><span>-${invoice.currency} ${Number(invoice.amountPaid).toLocaleString()}</span></div>
+    <div class="total-row"><strong>Balance due</strong><strong>${invoice.currency} ${Number(balanceOf(invoice)).toLocaleString()}</strong></div>` : ''}
   </div>
 </div>
 
@@ -503,11 +581,14 @@ exports.generatePDF = async (req, res, next) => {
 };
 
 // ── Email HTML builders ─────────────────────────────────────────────────
-function invoiceEmailHtml(invoice, company) {
-  const cur = invoice.currency || 'USD';
+// payUrl: the customer's pay page, when the business takes online payments.
+function invoiceEmailHtml(invoice, company, payUrl) {
+  const cur = invoice.currency || 'NGN';
   const profile = company?.profile || {};
   const bank = bankDetailsBlock(company);
   const portalUrl = `${clientUrl()}/portal/login?company=${invoice.companyId}`;
+  const balance = balanceOf(invoice);
+  const partly = (invoice.amountPaid || 0) > 0 && balance > 0;
   const rows = (invoice.items || []).map((it) => `
     <tr>
       <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#334155;">${esc(it.description)}</td>
@@ -542,12 +623,20 @@ function invoiceEmailHtml(invoice, company) {
       ${invoice.tax ? `<tr><td style="padding:6px 0;font-size:14px;color:#475569;">Tax</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">${money(invoice.tax, cur)}</td></tr>` : ''}
       ${invoice.discount ? `<tr><td style="padding:6px 0;font-size:14px;color:#475569;">Discount</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">-${money(invoice.discount, cur)}</td></tr>` : ''}
       <tr><td style="padding:12px 0 0;font-size:17px;font-weight:800;color:#6366f1;border-top:2px solid #6366f1;">TOTAL</td><td style="padding:12px 0 0;font-size:17px;font-weight:800;color:#6366f1;border-top:2px solid #6366f1;text-align:right;">${money(invoice.total, cur)}</td></tr>
+      ${partly ? `
+      <tr><td style="padding:6px 0;font-size:14px;color:#475569;">Paid</td><td style="padding:6px 0;font-size:14px;color:#475569;text-align:right;">-${money(invoice.amountPaid, cur)}</td></tr>
+      <tr><td style="padding:6px 0;font-size:15px;font-weight:800;color:#0f172a;">Balance due</td><td style="padding:6px 0;font-size:15px;font-weight:800;color:#0f172a;text-align:right;">${money(balance, cur)}</td></tr>` : ''}
     </table>
 
     <div style="clear:both;text-align:center;margin:8px 0 24px;">
-      <a href="${portalUrl}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
-        View Invoice &amp; Pay
+      ${payUrl && balance > 0 ? `
+      <a href="${esc(payUrl)}" style="background:#0e2a22;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block;">
+        Pay ${esc(moneyOf(balance, cur))} now
       </a>
+      <p style="color:#94a3b8;font-size:12px;margin:10px 0 0;">Card, bank transfer or USSD, through Paystack.</p>` : `
+      <a href="${portalUrl}" style="background:#6366f1;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+        View invoice
+      </a>`}
     </div>
 
     ${invoice.notes ? `<p style="font-size:13px;color:#475569;background:#f8fafc;border-radius:8px;padding:12px;">${esc(invoice.notes)}</p>` : ''}
@@ -576,7 +665,7 @@ function invoiceEmailHtml(invoice, company) {
 }
 
 function receiptEmailHtml(invoice, company) {
-  const cur = invoice.currency || 'USD';
+  const cur = invoice.currency || 'NGN';
   const portalUrl = `${clientUrl()}/portal/login?company=${invoice.companyId}`;
   return `
     <div style="text-align:center;margin:0 0 8px;">
@@ -621,11 +710,12 @@ async function dispatchInvoiceToCustomer(invoice, company) {
   invoice.sentAt = invoice.sentAt || new Date();
   invoice.reminders.push({ sentAt: new Date(), method: 'email', aiGenerated: false, messagePreview: 'Invoice sent to customer' });
   await invoice.save();
+  const url = canPayOnline(company, invoice) ? await payLink(invoice) : null;
 
   if (invoice.customer?.email) {
     const html = emailService.baseTemplate(
       `Invoice ${invoice.invoiceNumber}`,
-      invoiceEmailHtml(invoice, company),
+      invoiceEmailHtml(invoice, company, url),
       { name: company?.companyName, logo: company?.logo, tagline: company?.profile?.tagline },
     );
     emailService.send({
@@ -639,7 +729,7 @@ async function dispatchInvoiceToCustomer(invoice, company) {
 
   if (invoice.customer?.phone && company?.smsSettings?.enabled !== false && company?.smsSettings?.sendInvoiceSMS !== false) {
     const { sendInvoiceSMS } = require('../services/smsService');
-    sendInvoiceSMS(invoice.customer.phone, invoice.customer.name, invoice.invoiceNumber, invoice.total, company?.companyName).catch(() => {});
+    sendInvoiceSMS(invoice.customer.phone, invoice.customer.name, invoice.invoiceNumber, moneyOf(balanceOf(invoice) || invoice.total, invoice.currency), company?.companyName, url).catch(() => {});
   }
 }
 exports.dispatchInvoiceToCustomer = dispatchInvoiceToCustomer;

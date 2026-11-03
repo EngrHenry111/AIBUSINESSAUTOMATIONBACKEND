@@ -4,6 +4,7 @@ const timeout = require('connect-timeout');
 const { protect } = require('../middleware/authMiddleware');
 const { enforceTenant } = require('../middleware/tenantMiddleware');
 const { aiLimiter } = require('../middleware/rateLimitMiddleware');
+const { isManager } = require('../middleware/roleMiddleware');
 const ctrl = require('../controllers/invoiceController');
 const router = express.Router();
 
@@ -16,6 +17,7 @@ router.use(timeout('30s'));
 router.get('/', ctrl.getInvoices);
 router.post('/', ctrl.createInvoice);
 router.get('/overdue', ctrl.getOverdueInvoices);
+router.patch('/settings/reminders', isManager, ctrl.updateReminderSettings);
 router.get('/recurring', ctrl.getRecurringInvoices);
 router.get('/:id', ctrl.getInvoice);
 router.put('/:id', ctrl.updateInvoice);
@@ -23,6 +25,8 @@ router.delete('/:id', ctrl.deleteInvoice);
 router.post('/:id/draft-reminder', aiLimiter, ctrl.draftReminder);
 router.post('/:id/send-email', ctrl.sendInvoiceEmail);
 router.post('/:id/send-receipt', ctrl.sendPaymentReceipt);
+router.post('/:id/payments', ctrl.recordPayment);
+router.get('/:id/pay-link', ctrl.getPayLink);
 router.patch('/:id/recurring', ctrl.toggleRecurring);
 router.post('/:id/recurring/generate-now', ctrl.generateRecurringNow);
 

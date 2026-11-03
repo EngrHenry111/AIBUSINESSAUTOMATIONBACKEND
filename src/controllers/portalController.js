@@ -130,6 +130,13 @@ exports.getPortalData = async (req, res, next) => {
       Appointment.find({ companyId, 'customer.email': email }).sort({ scheduledAt: -1 }).lean(),
     ]);
 
+    // Unpaid invoices carry their pay page when the business takes online payments.
+    const { balanceOf, canPayOnline, payLink } = require('../utils/invoicePayments');
+    const payUrls = new Map();
+    for (const i of invoices) {
+      if (i.status !== 'draft' && canPayOnline(company, i)) payUrls.set(String(i._id), await payLink(i)); // eslint-disable-line no-await-in-loop
+    }
+
     res.status(200).json({
       success: true,
       data: {
@@ -155,11 +162,13 @@ exports.getPortalData = async (req, res, next) => {
           _id: i._id,
           invoiceNumber: i.invoiceNumber,
           total: i.total,
-          currency: i.currency || 'USD',
+          balance: balanceOf(i),
+          currency: i.currency || 'NGN',
           status: i.status,
           issuedAt: i.issuedAt || i.createdAt,
           dueAt: i.dueAt,
           paidAt: i.paidAt || null,
+          payUrl: payUrls.get(String(i._id)) || null,
         })),
         orders: orders.map((o) => ({
           _id: o._id,

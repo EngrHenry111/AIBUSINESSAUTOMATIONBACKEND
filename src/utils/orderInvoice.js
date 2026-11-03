@@ -64,6 +64,8 @@ async function createInvoiceFromOrder(order, { userId, dueInDays = 7 } = {}) {
 
   const status = invoiceStatusFor(order);
   const now = new Date();
+  // A split payment's first half was paid at checkout.
+  const upFront = status === 'partial' ? round2(order.splitPayment?.firstAmount) : 0;
   const paymentNote = {
     paystack: 'Paid online via Paystack.',
     pay_on_delivery: 'Payment due on delivery.',
@@ -94,6 +96,10 @@ async function createInvoiceFromOrder(order, { userId, dueInDays = 7 } = {}) {
       issuedAt: now,
       dueAt: new Date(now.getTime() + dueInDays * DAY_MS),
       paidAt: status === 'paid' ? now : undefined,
+      ...(upFront > 0 && {
+        amountPaid: upFront,
+        payments: [{ amount: upFront, method: 'paystack', note: `Paid at checkout, order ${order.orderNumber}`, paidAt: now }],
+      }),
       notes: [`Order ${order.orderNumber}.`, paymentNote, order.couponCode && `Coupon: ${order.couponCode}.`].filter(Boolean).join(' '),
       createdBy: userId || order.createdBy,
     });

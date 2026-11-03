@@ -482,6 +482,14 @@ exports.webhook = async (req, res) => {
             console.log(`Storefront webhook fulfilment FAILED for ${reference}: ${e.message}`);
             logger.error(`Storefront webhook fulfilment failed for ${reference}: ${e.stack || e.message}`);
           }
+        } else if (metadata?.type === 'invoice_payment' && metadata?.companyId) {
+          try {
+            const { fulfilInvoicePayment } = require('../utils/invoicePayments');
+            const { invoice, duplicate } = await fulfilInvoicePayment(data);
+            console.log(`Invoice payment ${duplicate ? 'already recorded' : 'recorded'}: ${invoice?.invoiceNumber} (${reference})`);
+          } catch (e) {
+            logger.error(`Invoice payment webhook failed for ${reference}: ${e.stack || e.message}`);
+          }
         } else if (metadata?.type === 'school_fee' && metadata?.companyId) {
           try {
             const { fulfilSchoolFeePayment } = require('./schoolFeeController');

@@ -207,6 +207,11 @@ const companySchema = new mongoose.Schema({
   },
 
   // ── SMS notifications (Termii) ────────────────────────────────────────────
+  // Automatic overdue reminders (utils/invoiceReminders). Off = only the
+  // reminders someone sends by hand go out.
+  invoiceReminders: {
+    enabled: { type: Boolean, default: true },
+  },
   smsSettings: {
     enabled: { type: Boolean, default: true },
     sendInvoiceSMS: { type: Boolean, default: true },

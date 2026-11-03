@@ -40,10 +40,32 @@ const invoiceSchema = new mongoose.Schema({
   sentAt: { type: Date },
   receiptSentAt: { type: Date },
   notes: String,
+
+  // ── Payments ──────────────────────────────────────────────────────────
+  // What has come in so far. balance = total − amountPaid (utils/
+  // invoicePayments.balanceOf). A Paystack payment is recorded once per
+  // reference, so the webhook and the customer's return trip can't both
+  // credit it. 'marked_paid' is the gap filled when someone just sets the
+  // status to Paid, and is taken back out if they change it again.
+  amountPaid: { type: Number, default: 0 },
+  payments: [{
+    amount: { type: Number, required: true },
+    method: { type: String, enum: ['paystack', 'bank_transfer', 'cash', 'pos', 'other', 'marked_paid'], required: true },
+    reference: String,
+    note: String,
+    paidAt: { type: Date, default: Date.now },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  }],
+  // Unguessable key for the customer's public pay page (/pay/:token).
+  payToken: { type: String },
+  // Stops automatic overdue reminders for this one invoice.
+  remindersPaused: { type: Boolean, default: false },
+
   reminders: [{
     sentAt: Date,
     method: { type: String, enum: ['email', 'whatsapp', 'sms'] },
     aiGenerated: { type: Boolean, default: false },
+    auto: { type: Boolean, default: false }, // sent by utils/invoiceReminders
     messagePreview: String,
   }],
   ai: {
@@ -97,6 +119,7 @@ invoiceSchema.index({ companyId: 1, dueAt: 1 });
 invoiceSchema.index({ companyId: 1, invoiceNumber: 1 }, { unique: true });
 invoiceSchema.index({ isRecurring: 1, 'recurringSettings.active': 1, 'recurringSettings.nextDueDate': 1 });
 invoiceSchema.index({ recurringParentId: 1 });
+invoiceSchema.index({ payToken: 1 }, { unique: true, partialFilterExpression: { payToken: { $type: 'string' } } });
 invoiceSchema.index({ companyId: 1, matterId: 1 }, { partialFilterExpression: { matterId: { $type: 'objectId' } } });
 // One invoice per order — also makes concurrent "create invoice" clicks safe.
 invoiceSchema.index({ orderId: 1 }, { unique: true, partialFilterExpression: { orderId: { $type: 'objectId' } } });

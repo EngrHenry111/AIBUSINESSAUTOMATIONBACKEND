@@ -75,17 +75,18 @@ async function sendSMS({ to, message }) {
 }
 
 // ── Templates ────────────────────────────────────────────────────────────
-async function sendInvoiceSMS(phone, customerName, invoiceNumber, amount, companyName) {
+// `amount` is already formatted with its currency (e.g. "₦150,000").
+async function sendInvoiceSMS(phone, customerName, invoiceNumber, amount, companyName, payUrl) {
   return sendSMS({
     to: phone,
-    message: `Hi ${customerName}, you have an invoice ${invoiceNumber} of NGN ${Number(amount).toLocaleString()} from ${companyName}. Please make payment. - BizlyAI`,
+    message: `Hi ${customerName}, ${companyName || 'we'} sent you invoice ${invoiceNumber} for ${amount}.${payUrl ? ` Pay here: ${payUrl}` : ''} - ${companyName || 'BizlyAI'}`,
   });
 }
 
-async function sendPaymentReminderSMS(phone, customerName, invoiceNumber, amount, daysOverdue) {
+async function sendPaymentReminderSMS(phone, customerName, invoiceNumber, amount, daysOverdue, companyName, payUrl) {
   return sendSMS({
     to: phone,
-    message: `Hi ${customerName}, your invoice ${invoiceNumber} of NGN ${Number(amount).toLocaleString()} is ${daysOverdue} day(s) overdue. Please pay now to avoid service disruption. - BizlyAI`,
+    message: `Hi ${customerName}, invoice ${invoiceNumber} for ${amount} is ${daysOverdue} day(s) overdue.${payUrl ? ` Pay here: ${payUrl}` : ' Please arrange payment.'} - ${companyName || 'BizlyAI'}`,
   });
 }
 
