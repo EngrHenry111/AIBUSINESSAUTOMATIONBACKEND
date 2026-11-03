@@ -106,7 +106,7 @@ Object.keys(AGENT_PROMPTS).forEach((key) => {
 /**
  * Core completion function
  */
-async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxTokens = 800, stream = false, reasoningEffort = 'low' }) {
+async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxTokens = 800, stream = false, reasoningEffort = 'low', tools }) {
   const groq = getGroqClient();
   try {
     const response = await groq.chat.completions.create({
@@ -115,6 +115,7 @@ async function complete({ messages, model = MODELS.FAST, temperature = 0.2, maxT
       max_tokens: maxTokens,
       messages,
       stream,
+      ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
       // The openai/gpt-oss-* models spend part of max_tokens on a hidden
       // reasoning pass before the actual answer — 'low' keeps that overhead
       // small so existing maxTokens budgets (tuned for the old non-reasoning

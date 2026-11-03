@@ -97,52 +97,55 @@ exports.getInvoices = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// Shared by POST /invoices and the business assistant (services/assistant).
+async function createInvoiceRecord(input, companyId, userId) {
+  const body = { ...input };
+  // Server-owned fields — the number is allocated below, and an order link
+  // is only ever made by POST /orders/:id/invoice.
+  delete body.invoiceNumber; delete body.orderId; delete body.orderNumber; delete body.matterId; delete body.matterNumber;
+
+  // Resolve currency (explicit request wins, else the company's default)
+  // and snapshot the exchange rate now — invoices should keep the rate
+  // that was live when they were issued, not float with the market later.
+  if (!body.currency) {
+    const company = await Company.findById(companyId).select('defaultCurrency');
+    body.currency = company?.defaultCurrency || 'NGN';
+  }
+  const { exchangeRate, ngnEquivalent } = await currencyFieldsFor(body.currency, Number(body.total) || 0);
+  body.exchangeRate = exchangeRate;
+  body.ngnEquivalent = ngnEquivalent;
+  // This invoice IS occurrence #1 when recurring — the scheduler only
+  // ever generates #2 onward from it as an immutable template. nextDueDate
+  // is when #2 should fire: whatever the client sent (a chosen start
+  // date), or one interval from now if it didn't send one.
+  if (body.isRecurring) {
+    const { addInterval } = require('../utils/recurringInvoices');
+    const rs = body.recurringSettings || {};
+    body.recurringSettings = {
+      interval: rs.interval || 'monthly',
+      nextDueDate: rs.nextDueDate || rs.startDate || addInterval(new Date(), rs.interval || 'monthly'),
+      maxOccurrences: rs.maxOccurrences || undefined,
+      endDate: rs.endDate || undefined,
+      active: true,
+      totalGenerated: 0,
+      consecutiveUnpaid: 0,
+    };
+  }
+
+  const invoice = await createWithNumber({ ...body, companyId, createdBy: userId });
+  await recordCustomerTransaction({
+    companyId, customer: invoice.customer, amount: invoice.total,
+    countsAsOrder: false, date: invoice.issuedAt, userId,
+  });
+
+  require('../utils/cache').del(`dashboard_${companyId}`);
+  return invoice;
+}
+exports.createInvoiceRecord = createInvoiceRecord;
+
 exports.createInvoice = async (req, res, next) => {
   try {
-    const body = { ...req.body };
-    // Server-owned fields — the number is allocated below, and an order link
-    // is only ever made by POST /orders/:id/invoice.
-    delete body.invoiceNumber; delete body.orderId; delete body.orderNumber; delete body.matterId; delete body.matterNumber;
-
-    // Resolve currency (explicit request wins, else the company's default)
-    // and snapshot the exchange rate now — invoices should keep the rate
-    // that was live when they were issued, not float with the market later.
-    if (!body.currency) {
-      const company = await Company.findById(req.companyId).select('defaultCurrency');
-      body.currency = company?.defaultCurrency || 'NGN';
-    }
-    const { exchangeRate, ngnEquivalent } = await currencyFieldsFor(body.currency, Number(body.total) || 0);
-    body.exchangeRate = exchangeRate;
-    body.ngnEquivalent = ngnEquivalent;
-    // This invoice IS occurrence #1 when recurring — the scheduler only
-    // ever generates #2 onward from it as an immutable template. nextDueDate
-    // is when #2 should fire: whatever the client sent (a chosen start
-    // date), or one interval from now if it didn't send one.
-    if (body.isRecurring) {
-      const { addInterval } = require('../utils/recurringInvoices');
-      const rs = body.recurringSettings || {};
-      body.recurringSettings = {
-        interval: rs.interval || 'monthly',
-        nextDueDate: rs.nextDueDate || rs.startDate || addInterval(new Date(), rs.interval || 'monthly'),
-        maxOccurrences: rs.maxOccurrences || undefined,
-        endDate: rs.endDate || undefined,
-        active: true,
-        totalGenerated: 0,
-        consecutiveUnpaid: 0,
-      };
-    }
-
-    const invoice = await createWithNumber({
-      ...body,
-      companyId: req.companyId,
-      createdBy: req.user._id,
-    });
-    await recordCustomerTransaction({
-      companyId: req.companyId, customer: invoice.customer, amount: invoice.total,
-      countsAsOrder: false, date: invoice.issuedAt, userId: req.user._id,
-    });
-
-    require('../utils/cache').del(`dashboard_${req.companyId}`);
+    const invoice = await createInvoiceRecord(req.body, req.companyId, req.user._id);
     res.status(201).json({ success: true, data: invoice });
   } catch (err) { next(err); }
 };
@@ -349,25 +352,34 @@ exports.getOverdueInvoices = async (req, res, next) => {
 
 const PAYMENT_METHODS = ['bank_transfer', 'cash', 'pos', 'other'];
 
-// POST /invoices/:id/payments { amount, method, note?, paidAt? } — money
-// received outside Paystack. Part-payments leave the invoice "partial".
+// Money received outside Paystack. Part-payments leave the invoice "partial".
+// Throws AppError for anything the person needs to fix. Shared by the route
+// below and the business assistant.
+async function recordManualPayment(invoiceId, companyId, userId, body) {
+  const invoice = await Invoice.findOne({ _id: invoiceId, companyId }).select('status total amountPaid currency');
+  if (!invoice) throw new AppError('Invoice not found.', 404);
+  if (invoice.status === 'cancelled') throw new AppError('This invoice is cancelled.', 400);
+  const balance = balanceOf(invoice);
+  const amount = round2(body.amount);
+  if (balance <= 0) throw new AppError('This invoice is already fully paid.', 400);
+  if (!(amount > 0)) throw new AppError('Enter the amount received.', 400);
+  if (amount > balance) throw new AppError(`The most left to pay on this invoice is ${moneyOf(balance, invoice.currency)}.`, 400);
+  const method = PAYMENT_METHODS.includes(body.method) ? body.method : 'bank_transfer';
+  const paidAt = body.paidAt ? new Date(body.paidAt) : new Date();
+  if (Number.isNaN(paidAt.getTime()) || paidAt > new Date(Date.now() + 60 * 1000)) throw new AppError('Choose a valid payment date.', 400);
+
+  const { invoice: updated } = await applyInvoicePayment(invoice._id, companyId, {
+    amount, method, note: String(body.note || '').trim().slice(0, 300) || undefined, paidAt, userId,
+  });
+  return updated;
+}
+exports.recordManualPayment = recordManualPayment;
+exports.PAYMENT_METHODS = PAYMENT_METHODS;
+
+// POST /invoices/:id/payments { amount, method, note?, paidAt? }
 exports.recordPayment = async (req, res, next) => {
   try {
-    const invoice = await Invoice.findOne({ _id: req.params.id, companyId: req.companyId }).select('status total amountPaid');
-    if (!invoice) return next(new AppError('Invoice not found.', 404));
-    if (invoice.status === 'cancelled') return next(new AppError('This invoice is cancelled.', 400));
-    const balance = balanceOf(invoice);
-    const amount = round2(req.body.amount);
-    if (balance <= 0) return next(new AppError('This invoice is already fully paid.', 400));
-    if (!(amount > 0)) return next(new AppError('Enter the amount received.', 400));
-    if (amount > balance) return next(new AppError(`The most left to pay on this invoice is ${moneyOf(balance)}.`, 400));
-    const method = PAYMENT_METHODS.includes(req.body.method) ? req.body.method : 'bank_transfer';
-    const paidAt = req.body.paidAt ? new Date(req.body.paidAt) : new Date();
-    if (Number.isNaN(paidAt.getTime()) || paidAt > new Date(Date.now() + 60 * 1000)) return next(new AppError('Choose a valid payment date.', 400));
-
-    const { invoice: updated } = await applyInvoicePayment(invoice._id, req.companyId, {
-      amount, method, note: String(req.body.note || '').trim().slice(0, 300) || undefined, paidAt, userId: req.user._id,
-    });
+    const updated = await recordManualPayment(req.params.id, req.companyId, req.user._id, req.body);
     res.status(201).json({ success: true, data: updated });
   } catch (err) { next(err); }
 };

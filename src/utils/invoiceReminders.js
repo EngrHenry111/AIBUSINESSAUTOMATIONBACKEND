@@ -141,4 +141,4 @@ async function checkOverdueInvoices() {
   }
 }
 
-module.exports = { checkOverdueInvoices, SCHEDULE, reminderHtml, autoCount };
+module.exports = { checkOverdueInvoices, remind, SCHEDULE, MIN_GAP_MS, reminderHtml, autoCount };

@@ -249,6 +249,7 @@ app.use(`${API}/appointments`, appointmentRoutes);
 app.use(`${API}/reports`, reportRoutes);
 app.use(`${API}/social`, socialRoutes);
 app.use(`${API}/agents`, agentRoutes);
+app.use(`${API}/assistant`, require('./routes/assistantRoutes'));
 app.use(`${API}/analytics`, analyticsRoutes);
 app.use(`${API}/admin`, adminRoutes);
 app.use(`${API}/whatsapp`, whatsappRoutes);
