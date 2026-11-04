@@ -109,6 +109,8 @@ async function releaseOrderStock(order, userId) {
   order.stockApplied = false;
 }
 
+exports.releaseOrderStock = releaseOrderStock;
+
 exports.getOrders = async (req, res, next) => {
   try {
     const { status, source, paymentMethod, page = 1, limit = 20, search } = req.query;

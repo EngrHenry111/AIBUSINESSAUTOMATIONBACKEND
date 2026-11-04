@@ -72,6 +72,8 @@ async function applyStockAdjustment(product, adjustment, opts = {}) {
   return { previousQuantity: prev, newQuantity: next, low };
 }
 exports.applyStockAdjustment = applyStockAdjustment;
+exports.isLowStock = isLow;
+exports.notifyLowStock = notifyLowStock;
 
 // ── Cloudinary upload for one local image ──────────────────────────────
 async function uploadImageFile(localPath, companyId) {

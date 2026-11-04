@@ -6,7 +6,7 @@ const orderSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   orderNumber: { type: String, required: true },
   customer: { name: String, email: String, phone: String, address: String, city: String, state: String },
-  source: { type: String, enum: ['manual', 'storefront'], default: 'manual' },
+  source: { type: String, enum: ['manual', 'storefront', 'pos'], default: 'manual' }, // pos = Quick Sale at the counter
   paystackReference: { type: String },
   items: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
@@ -31,7 +31,8 @@ const orderSchema = new mongoose.Schema({
   // (receipt uploads can't be trusted); kept so older orders still load.
   paymentMethod: {
     type: String,
-    enum: ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_payment'],
+    // cash/transfer/pos_terminal/credit: Quick Sale at the counter (credit = customer pays later).
+    enum: ['paystack', 'pay_on_delivery', 'bank_transfer', 'split_payment', 'cash', 'transfer', 'pos_terminal', 'credit'],
     default: 'paystack',
   },
   // Only meaningful when paymentMethod is 'split_payment' — the 50% paid at
@@ -74,6 +75,19 @@ const orderSchema = new mongoose.Schema({
   notes: String,
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
+  // Quick Sale (source 'pos'): who sold it, cash handed over and change,
+  // and the till's own id for the sale so a retried request on a bad
+  // network can't record it twice.
+  pos: {
+    soldByName: String,
+    amountTendered: Number,
+    change: Number,
+    voidedAt: Date,
+    voidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    voidReason: String,
+  },
+  clientRef: String,
+
   // Invoice generated from this order (see utils/orderInvoice.js).
   invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
   invoiceNumber: String,
@@ -96,5 +110,6 @@ orderSchema.index({ companyId: 1, orderNumber: 1 }, { unique: true });
 orderSchema.index({ companyId: 1, 'customer.email': 1 });
 orderSchema.index({ paystackReference: 1 }, { unique: true, sparse: true });
 orderSchema.index({ companyId: 1, source: 1, createdAt: -1 });
+orderSchema.index({ companyId: 1, clientRef: 1 }, { unique: true, partialFilterExpression: { clientRef: { $type: 'string' } } });
 
 module.exports = mongoose.model('Order', orderSchema);
