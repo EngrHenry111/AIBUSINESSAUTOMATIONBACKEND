@@ -1,6 +1,7 @@
 'use strict';
 
 const { generateAccessToken, generateRefreshToken, setTokenCookies } = require('./generateTokens');
+const { subscriptionInfo } = require('./subscriptionChecker');
 
 // Shared "you're logged in" response — used by password login, 2FA completion
 // and backup-code login. Tokens travel only as httpOnly cookies (set below);
@@ -28,6 +29,9 @@ async function sendTokenResponse(user, company, statusCode, res, extra = {}) {
       plan: company.subscription?.plan,
       settings: company.settings,
     } : null,
+    // So a trial that has ended is blocked straight after login, not only
+    // after the next page refresh.
+    ...subscriptionInfo(company, user),
     ...extra,
   });
 }

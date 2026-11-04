@@ -7,14 +7,16 @@ const { isManager } = require('../middleware/roleMiddleware');
 const { uploadDocument } = require('../config/cloudinary');
 const { AppError } = require('../middleware/errorMiddleware');
 const ctrl = require('../controllers/procurementController');
+const { hasBusinessFeatures } = require('../utils/subscriptionChecker');
 
 const router = express.Router();
 router.use(protect, enforceTenant, isManager);
 
-// e-Procurement is a Business-plan feature — gated server-side (not just a
-// hidden sidebar link) since the frontend alone can't stop a direct API call.
+// e-Procurement is a Business-plan feature (also open during the free
+// trial) — gated server-side since the frontend alone can't stop a direct
+// API call.
 const requireBusinessPlan = (req, res, next) => {
-  if (req.company?.subscription?.plan !== 'business' && req.user.role !== 'super_admin') {
+  if (!hasBusinessFeatures(req.company) && req.user.role !== 'super_admin') {
     return next(new AppError('e-Procurement is available on the Business plan. Please upgrade to access this feature.', 403));
   }
   next();

@@ -182,11 +182,9 @@ exports.getMe = async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id);
     const company = req.user.companyId ? await Company.findById(req.user.companyId) : null;
-    const { getSubscriptionState, graceRemainingDays } = require('../utils/subscriptionChecker');
-    // Super admins aren't tied to a company subscription — never soft-block them.
-    const subscriptionState = user.role === 'super_admin' ? 'active' : getSubscriptionState(company);
-    const graceDays = subscriptionState === 'grace' ? graceRemainingDays(company) : null;
-    res.status(200).json({ success: true, user, company, subscriptionState, graceDays });
+    const { subscriptionInfo } = require('../utils/subscriptionChecker');
+    // Super admins aren't tied to a company subscription — never soft-blocked.
+    res.status(200).json({ success: true, user, company, ...subscriptionInfo(company, user) });
   } catch (err) { next(err); }
 };
 

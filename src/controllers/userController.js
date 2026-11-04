@@ -14,6 +14,7 @@ const logger = require('../utils/logger');
 const emailService = require('../services/emailService');
 const { DEFAULT_DEPARTMENTS } = require('../utils/departments');
 const { assertPermanentEmail } = require('../utils/disposableEmail');
+const { seatLimit } = require('../utils/subscriptionChecker');
 
 const clientUrl = () => (process.env.CLIENT_URL || 'https://bislyai.com').split(',')[0].trim().replace(/\/+$/, '');
 
@@ -150,14 +151,15 @@ exports.inviteMember = async (req, res, next) => {
     const roleError = canInviteAs(req.user.role, role);
     if (roleError) return next(new AppError(roleError.message, roleError.statusCode));
 
-    const company = await Company.findById(req.companyId).select('limits companyName');
+    const company = await Company.findById(req.companyId).select('limits companyName subscription createdAt');
     const currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active', noLogin: { $ne: true } });
 
     // maxUsers of -1 means unlimited (Enterprise) — without this guard a
     // negative limit would make currentCount >= maxUsers true immediately
     // and block every single invite.
-    if (company.limits.maxUsers > 0 && currentCount >= company.limits.maxUsers) {
-      return next(new AppError(`User limit reached (${company.limits.maxUsers}). Upgrade your plan to add more members.`, 403));
+    const maxUsers = seatLimit(company);
+    if (maxUsers > 0 && currentCount >= maxUsers) {
+      return next(new AppError(`User limit reached (${maxUsers}). Upgrade your plan to add more members.`, 403));
     }
 
     const user = await createInvitedUser({ companyId: req.companyId, name, email, role, inviter: req.user, companyName: company.companyName });
@@ -188,8 +190,9 @@ exports.bulkInviteMembers = async (req, res, next) => {
     }
     if (members.length > 100) return next(new AppError('Invite up to 100 members at a time.', 400));
 
-    const company = await Company.findById(req.companyId).select('limits companyName');
+    const company = await Company.findById(req.companyId).select('limits companyName subscription createdAt');
     let currentCount = await User.countDocuments({ companyId: req.companyId, status: 'active', noLogin: { $ne: true } });
+    const maxUsers = seatLimit(company);
 
     const results = [];
     for (const raw of members) {
@@ -203,8 +206,8 @@ exports.bulkInviteMembers = async (req, res, next) => {
       }
       const roleError = canInviteAs(req.user.role, role);
       if (roleError) { results.push({ email, status: 'failed', message: roleError.message }); continue; }
-      if (company.limits.maxUsers > 0 && currentCount >= company.limits.maxUsers) {
-        results.push({ email, status: 'failed', message: `User limit reached (${company.limits.maxUsers}).` });
+      if (maxUsers > 0 && currentCount >= maxUsers) {
+        results.push({ email, status: 'failed', message: `User limit reached (${maxUsers}).` });
         continue;
       }
 

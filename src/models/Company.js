@@ -33,6 +33,9 @@ const companySchema = new mongoose.Schema({
     status: { type: String, enum: ['active', 'inactive', 'past_due', 'cancelled', 'expired'], default: 'active' },
     currentPeriodStart: Date,
     currentPeriodEnd: Date,
+    // Free trial end. Unset means 14 days after the account opened (see
+    // utils/subscriptionChecker); set it to extend one company's trial.
+    trialEndsAt: Date,
     billingCycle: { type: String, enum: ['monthly', 'annual'], default: 'monthly' },
     // card: Paystack renews automatically. transfer: the owner pays each
     // period themselves (bank transfer/USSD) and gets renewal reminders.

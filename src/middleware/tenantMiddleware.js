@@ -18,7 +18,7 @@ const enforceTenant = async (req, res, next) => {
     }
 
     // Validate company is active
-    const company = await Company.findById(req.user.companyId).select('status subscription');
+    const company = await Company.findById(req.user.companyId).select('status subscription createdAt');
     if (!company) {
       return next(new AppError('Company not found.', 404));
     }
