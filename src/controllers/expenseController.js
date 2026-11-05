@@ -6,6 +6,8 @@ const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
 const Invoice = require('../models/Invoice');
 const Order = require('../models/Order');
+const LaundryOrder = require('../models/LaundryOrder');
+const CleaningJob = require('../models/CleaningJob');
 const { cloudinary } = require('../config/cloudinary');
 const { AppError } = require('../middleware/errorMiddleware');
 const { writeAuditLog } = require('../utils/auditLog');
@@ -34,8 +36,21 @@ async function uploadReceiptFile(localPath, companyId) {
   return r.url;
 }
 
+// Money actually taken on laundry tickets and cleaning jobs in the period
+// (by payment date), so deposits count when they come in.
+async function servicePaymentsBetween(Model, companyId, start, end) {
+  const id = typeof companyId === 'string' ? new mongoose.Types.ObjectId(companyId) : companyId;
+  const rows = await Model.aggregate([
+    { $match: { companyId: id, status: { $ne: 'cancelled' }, 'payments.at': { $gte: start, $lte: end } } },
+    { $unwind: '$payments' },
+    { $match: { 'payments.at': { $gte: start, $lte: end } } },
+    { $group: { _id: null, total: { $sum: '$payments.amount' } } },
+  ]);
+  return rows[0]?.total || 0;
+}
+
 async function revenueBetween(companyId, start, end) {
-  const [invAgg, ordAgg] = await Promise.all([
+  const [invAgg, ordAgg, laundry, cleaning] = await Promise.all([
     Invoice.aggregate([
       { $match: { companyId, status: 'paid', orderId: null, paidAt: { $gte: start, $lte: end } } },
       // ngnEquivalent is set for every invoice created after multi-currency
@@ -47,10 +62,13 @@ async function revenueBetween(companyId, start, end) {
       { $match: { companyId, status: { $nin: CANCELLED_ORDER }, createdAt: { $gte: start, $lte: end } } },
       { $group: { _id: null, total: { $sum: '$total' } } },
     ]),
+    servicePaymentsBetween(LaundryOrder, companyId, start, end),
+    servicePaymentsBetween(CleaningJob, companyId, start, end),
   ]);
   const invoices = invAgg[0]?.total || 0;
   const orders = ordAgg[0]?.total || 0;
-  return { invoices, orders, total: invoices + orders };
+  const services = Math.round(((laundry || 0) + (cleaning || 0)) * 100) / 100;
+  return { invoices, orders, services, total: invoices + orders + services };
 }
 
 async function expensesBetween(companyId, start, end) {
@@ -215,7 +233,7 @@ exports.getProfitLoss = async (req, res, next) => {
       success: true,
       data: {
         period: { start, end },
-        revenue: { invoices: revenue.invoices, orders: revenue.orders, total: revenue.total },
+        revenue: { invoices: revenue.invoices, orders: revenue.orders, services: revenue.services, total: revenue.total },
         expenses: { total: expenses.total, byCategory: byCategoryObj, breakdown: expenses.byCategory },
         grossProfit: netProfit,
         netProfit,

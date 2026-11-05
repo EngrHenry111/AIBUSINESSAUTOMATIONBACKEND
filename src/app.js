@@ -251,6 +251,8 @@ app.use(`${API}/social`, socialRoutes);
 app.use(`${API}/agents`, agentRoutes);
 app.use(`${API}/assistant`, require('./routes/assistantRoutes'));
 app.use(`${API}/pos`, require('./routes/posRoutes'));
+app.use(`${API}/laundry`, require('./routes/laundryRoutes'));
+app.use(`${API}/cleaning`, require('./routes/cleaningRoutes'));
 app.use(`${API}/analytics`, analyticsRoutes);
 app.use(`${API}/admin`, adminRoutes);
 app.use(`${API}/whatsapp`, whatsappRoutes);
