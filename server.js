@@ -29,6 +29,7 @@ async function bootstrap() {
     // (payments configured but storeEnabled false, or a missing storeSlug)
     require('./src/utils/migrations').migrateStoreEnabled().catch((e) => logger.warn(`migrateStoreEnabled failed: ${e.message}`));
     require('./src/utils/migrations').purgeDemoGroupData().catch((e) => logger.warn(`purgeDemoGroupData failed: ${e.message}`));
+    require('./src/utils/migrateConversations').migrateConversations();
 
     const httpServer = http.createServer(app);
 

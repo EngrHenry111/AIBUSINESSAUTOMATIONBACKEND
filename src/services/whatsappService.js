@@ -16,18 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
 
-const WhatsAppConversation = require('../models/WhatsAppConversation');
-const { getEmbedding } = require('./embeddingService');
-const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
-const { generateWhatsAppReply } = require('./groqService');
-const { cleanAIText } = require('../utils/cleanAIText');
-
 const SESSION_ROOT = path.join(process.cwd(), 'whatsapp-sessions');
-const AI_CONFIDENCE_FLOOR = 0.15;
-const HANDOVER_KEYWORDS = [
-  'human', 'agent', 'real person', 'person', 'representative', 'rep',
-  'speak to someone', 'talk to someone', 'talk to a human', 'customer service',
-];
 
 // companyId(string) -> { client, status, qr, qrBase64, phone, error }
 const sessions = new Map();
@@ -183,120 +172,19 @@ async function sendToCustomer(companyId, phone, message) {
 }
 
 // ── Inbound customer message ──────────────────────────────────────────────
+// Handled by the shared inbox (services/inbox), same as every other channel.
 async function handleIncomingMessage(companyId, customerPhone, customerName, messageText) {
   const session = sessions.get(String(companyId));
-
-  let convo = await WhatsAppConversation.findOne({
-    companyId, customerPhone, status: { $ne: 'resolved' },
-  }).sort({ lastMessageAt: -1 });
-
-  if (!convo) {
-    convo = await WhatsAppConversation.create({
-      companyId,
-      businessPhone: session?.phone || '',
-      customerPhone,
-      customerName,
-      status: 'ai',
-      messages: [],
-      lastMessageAt: new Date(),
-    });
-  }
-  if (!convo.customerName || convo.customerName === convo.customerPhone) {
-    convo.customerName = customerName;
-  }
-
-  convo.messages.push({ from: 'customer', content: messageText, timestamp: new Date(), read: false });
-  convo.lastMessageAt = new Date();
-  await convo.save();
-
-  const inbound = convo.messages[convo.messages.length - 1];
-  require('../utils/leadCapture').captureLead(companyId, {
-    source: 'whatsapp', phone: customerPhone,
-    name: convo.customerName && convo.customerName !== customerPhone ? convo.customerName : undefined,
-    email: require('../utils/leadCapture').contactFromText(messageText).email,
-    activityType: 'whatsapp', activity: `WhatsApp: "${require('../utils/leadCapture').excerpt(messageText)}"`,
-  });
-  roomEmit(companyId, 'whatsapp:new_message', {
-    conversationId: convo._id, message: inbound, customerName: convo.customerName, status: convo.status,
-  });
-
-  // ── Human is handling this thread ──────────────────────────────────────
-  if (convo.status === 'human_takeover') {
-    if (convo.assignedTo) {
-      userEmit(convo.assignedTo, 'whatsapp:new_message', { conversationId: convo._id, message: inbound });
-    } else {
-      roomEmit(companyId, 'whatsapp:handover_needed', {
-        conversationId: convo._id, customerName: convo.customerName,
-        customerPhone: convo.customerPhone, lastMessage: messageText,
-      });
-    }
-    return;
-  }
-
-  // ── AI flow ───────────────────────────────────────────────────────────
-  const lower = messageText.toLowerCase();
-  const keywordHit = HANDOVER_KEYWORDS.some((k) => lower.includes(k));
-
-  const chunks = await require('../utils/customerKnowledge').customerFacingChunks(companyId);
-
-  let embedding = null;
-  try { embedding = await getEmbedding(messageText); }
-  catch { logger.warn('Embedding service down — WhatsApp AI using keyword search only'); }
-
-  const ranked = rerankChunks(hybridSearch(chunks, embedding, messageText, { topK: 3 }), messageText);
-  const topScore = ranked[0]?.rerankScore || 0;
-
-  if (keywordHit || chunks.length === 0 || topScore < AI_CONFIDENCE_FLOOR) {
-    await triggerHumanHandover(convo, companyId);
-    return;
-  }
-
-  const context = ranked.slice(0, 3).map((r) => r.chunk).join('\n\n---\n\n');
-  const history = convo.messages
-    .slice(-9, -1)
-    .filter((m) => m.from === 'customer' || m.from === 'ai')
-    .map((m) => ({ role: m.from === 'customer' ? 'user' : 'assistant', content: m.content }));
-
-  let reply;
-  try {
-    reply = cleanAIText(await generateWhatsAppReply(context, messageText, history));
-  } catch (err) {
-    logger.error('WhatsApp AI reply failed:', err.message);
-    await triggerHumanHandover(convo, companyId);
-    return;
-  }
-
-  await sendToCustomer(companyId, customerPhone, reply);
-  convo.messages.push({ from: 'ai', content: reply, timestamp: new Date(), agentName: 'AI Assistant', read: true });
-  convo.status = 'ai';
-  convo.lastMessageAt = new Date();
-  await convo.save();
-
-  roomEmit(companyId, 'whatsapp:new_message', {
-    conversationId: convo._id, message: convo.messages[convo.messages.length - 1], status: 'ai',
-  });
-}
-
-// ── Escalate to a human ───────────────────────────────────────────────────
-async function triggerHumanHandover(convo, companyId) {
-  convo.status = 'human_takeover';
-  convo.assignedTo = null;
-  convo.handoverRequestedAt = new Date();
-  convo.messages.push({
-    from: 'system', content: 'Conversation escalated to a human agent', timestamp: new Date(), read: true,
-  });
-  convo.lastMessageAt = new Date();
-  await convo.save();
-
-  await sendToCustomer(companyId, convo.customerPhone, 'Please hold, connecting you to our team…');
-
-  const lastCustomer = [...convo.messages].reverse().find((m) => m.from === 'customer');
-  roomEmit(companyId, 'whatsapp:handover_needed', {
-    conversationId: convo._id,
-    customerName: convo.customerName,
-    customerPhone: convo.customerPhone,
-    lastMessage: lastCustomer?.content || '',
-    handoverRequestedAt: convo.handoverRequestedAt,
+  return require('./inbox').receiveMessage({
+    companyId,
+    channel: 'whatsapp',
+    externalId: customerPhone,
+    text: messageText,
+    name: customerName && customerName !== customerPhone ? customerName : undefined,
+    phone: customerPhone,
+    meta: { businessPhone: session?.phone || '' },
+    ai: { floor: 0.15, topK: 3, keywordHandover: true },
+    noAnswer: { reply: 'Please hold, connecting you to our team…', handover: true },
   });
 }
 
@@ -307,7 +195,6 @@ module.exports = {
   disconnect,
   sendToCustomer,
   handleIncomingMessage,
-  triggerHumanHandover,
   roomEmit,
   userEmit,
 };

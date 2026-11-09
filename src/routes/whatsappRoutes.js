@@ -18,13 +18,6 @@ router.post('/initialize', requireRole('super_admin', 'company_owner', 'manager'
 router.post('/disconnect', requireRole('super_admin', 'company_owner', 'manager'), ctrl.disconnect);
 router.post('/send-test', [body('phone').trim().notEmpty().withMessage('Phone number is required')], validate, ctrl.sendTest);
 
-// ── Conversations ─────────────────────────────────────────────────────────
-router.get('/conversations', ctrl.getConversations);
-router.get('/conversations/:id', ctrl.getConversation);
-router.post('/conversations/:id/message',
-  [body('message').trim().notEmpty().withMessage('Message is required')], validate, ctrl.sendMessage);
-router.post('/conversations/:id/takeover', ctrl.takeoverConversation);
-router.post('/conversations/:id/resolve', ctrl.resolveConversation);
-router.post('/conversations/:id/send-to-ai', ctrl.sendToAI);
+// Conversations: see /inbox (routes/inboxRoutes.js).
 
 module.exports = router;

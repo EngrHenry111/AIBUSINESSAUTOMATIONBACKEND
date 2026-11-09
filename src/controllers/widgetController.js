@@ -1,16 +1,9 @@
 'use strict';
 
-const { captureLead, contactFromText, excerpt } = require('../utils/leadCapture');
-const { customerFacingChunks } = require('../utils/customerKnowledge');
 const Company = require('../models/Company');
-const WidgetConversation = require('../models/WidgetConversation');
-const { getEmbedding } = require('../services/embeddingService');
-const { generateWhatsAppReply } = require('../services/groqService');
-const { hybridSearch, rerankChunks } = require('../utils/hybridSearch');
+const Conversation = require('../models/Conversation');
+const inbox = require('../services/inbox');
 const { AppError } = require('../middleware/errorMiddleware');
-const logger = require('../utils/logger');
-
-const io = (req) => req.app.get('io');
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // widget sessions expire after 24h
 const DEFAULTS = {
@@ -120,103 +113,57 @@ exports.handleWidgetMessage = async (req, res, next) => {
     if (!gate.ok) return next(new AppError(gate.message, 403));
 
     const ws = company.widgetSettings || {};
-    const host = originHostOf(req);
-
-    let convo = await WidgetConversation.findOne({ companyId: company._id, sessionId });
-    if (!convo) {
-      convo = new WidgetConversation({
-        companyId: company._id,
-        sessionId,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'],
-        originHost: host,
-      });
-    }
-    if (ws.collectEmail && visitorName && !convo.visitorName) convo.visitorName = String(visitorName).slice(0, 120);
-    if (ws.collectEmail && visitorEmail && !convo.visitorEmail) convo.visitorEmail = String(visitorEmail).slice(0, 160);
-
-    convo.messages.push({ role: 'user', content: message.trim(), read: true });
-
-    // Knowledge-base lookup — same hybrid search the internal AI Assistant
-    // uses, just answered in the short, conversational style used for
-    // customer-facing chat (see generateWhatsAppReply).
-    let questionEmbedding = null;
-    try { questionEmbedding = await getEmbedding(message); }
-    catch { logger.warn('Embedding service unavailable for widget chat, falling back to keyword-only search'); }
-
-    const chunks = await customerFacingChunks(company._id);
-    let reply;
-    let sources = [];
-    let noAnswer = false;
-
-    if (!chunks.length) {
-      noAnswer = true;
-    } else {
-      const searchResults = hybridSearch(chunks, questionEmbedding, message);
-      const reranked = rerankChunks(searchResults, message);
-      const topScore = reranked[0]?.rerankScore || 0;
-
-      if (!reranked.length || topScore < 0.05) {
-        noAnswer = true;
-      } else {
-        const topChunks = reranked.slice(0, 5);
-        const context = topChunks.map((c) => c.chunk).join('\n\n---\n\n');
-        const history = convo.messages.slice(-7, -1).map((m) => ({ role: m.role, content: m.content }));
-        reply = await generateWhatsAppReply(context, message, history);
-        sources = [...new Set(topChunks.map((c) => c.source))];
-      }
-    }
-
-    if (noAnswer) {
-      reply = ws.offlineMessage || DEFAULTS.offlineMessage;
-      if (ws.humanHandoverEnabled !== false && !convo.handedToHuman) {
-        convo.handedToHuman = true;
-        convo.handoverRequestedAt = new Date();
-      }
-    }
-
-    convo.messages.push({ role: 'assistant', content: reply, sources, sentBy: 'ai', read: false });
-    convo.lastMessageAt = new Date();
-    await convo.save();
-
-    if (noAnswer) {
-      io(req)?.to(`company:${company._id}`).emit('widget:handover_needed', {
-        conversationId: convo._id, visitorName: convo.visitorName || null,
-      });
-    }
-    io(req)?.to(`company:${company._id}`).emit('widget:new_message', { conversationId: convo._id });
-
-    // Anyone who leaves an email or phone — in the pre-chat form or typed
-    // into a message — becomes (or updates) a lead.
-    const typed = contactFromText(message);
-    if (convo.visitorEmail || typed.email || typed.phone) {
-      captureLead(company._id, {
-        source: 'chat_widget', name: convo.visitorName, email: convo.visitorEmail || typed.email, phone: typed.phone,
-        activityType: 'chat', activity: `Website chat: "${excerpt(message)}"${noAnswer ? ' — needs a reply from your team' : ''}`,
-      });
-    }
+    const result = await inbox.receiveMessage({
+      companyId: company._id,
+      channel: 'widget',
+      externalId: String(sessionId).slice(0, 100),
+      text: String(message).trim().slice(0, 4000),
+      name: ws.collectEmail && visitorName ? String(visitorName).slice(0, 120) : undefined,
+      email: ws.collectEmail && visitorEmail ? String(visitorEmail).slice(0, 160) : undefined,
+      meta: { originHost: originHostOf(req), ipAddress: req.ip, userAgent: req.headers['user-agent'] },
+      ai: { floor: 0.05, topK: 5, keywordHandover: false },
+      noAnswer: { reply: ws.offlineMessage || DEFAULTS.offlineMessage, handover: ws.humanHandoverEnabled !== false },
+    });
 
     // Source document names stay with the team (saved on the conversation),
-    // not sent to the visitor.
-    res.status(200).json({ success: true, data: { reply, sessionId } });
+    // not sent to the visitor. reply is null while a team member is handling
+    // the chat — their answer arrives through the history poll.
+    res.status(200).json({
+      success: true,
+      data: { reply: result.reply, waitingForHuman: result.waitingForHuman, sessionId },
+    });
   } catch (err) { next(err); }
 };
+
+// What the visitor sees: their messages, the replies, and notices sent to them.
+function visitorMessages(convo) {
+  return convo.messages
+    .filter((m) => m.from !== 'system' || m.notice)
+    .map((m) => ({
+      id: String(m._id),
+      role: m.from === 'customer' ? 'user' : 'assistant',
+      from: m.from === 'human' ? 'team' : m.from === 'system' ? 'notice' : m.from,
+      agentName: m.from === 'human' ? m.agentName : undefined,
+      content: m.content,
+      timestamp: m.timestamp,
+    }));
+}
 
 exports.getWidgetHistory = async (req, res, next) => {
   try {
     const company = await findByCompanySlug(req.params.companySlug);
     if (!company) return next(new AppError('Not found.', 404));
 
-    const convo = await WidgetConversation.findOne({ companyId: company._id, sessionId: req.params.sessionId }).lean();
+    const convo = await Conversation.findOne({
+      companyId: company._id, channel: 'widget', externalId: String(req.params.sessionId),
+    }).sort({ lastMessageAt: -1 }).lean();
     if (!convo || Date.now() - new Date(convo.lastMessageAt).getTime() > SESSION_TTL_MS) {
       return res.status(200).json({ success: true, data: { messages: [] } });
     }
 
     res.status(200).json({
       success: true,
-      data: {
-        messages: convo.messages.map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp, sources: m.sources })),
-      },
+      data: { messages: visitorMessages(convo), status: convo.status },
     });
   } catch (err) { next(err); }
 };
@@ -225,143 +172,7 @@ exports.getWidgetHistory = async (req, res, next) => {
 // PROTECTED — business owner / team, scoped to req.companyId
 // ═══════════════════════════════════════════════════════════════════════
 
-function listItem(c) {
-  const msgs = c.messages || [];
-  const last = msgs[msgs.length - 1];
-  return {
-    _id: c._id,
-    visitorName: c.visitorName || null,
-    visitorEmail: c.visitorEmail || null,
-    displayName: c.visitorName || `Visitor #${String(c._id).slice(-4)}`,
-    lastMessage: last ? last.content.slice(0, 90) : '',
-    lastMessageFrom: last?.role || null,
-    lastMessageAt: c.lastMessageAt,
-    isResolved: c.isResolved,
-    handedToHuman: c.handedToHuman,
-    assignedTo: c.assignedTo || null,
-    unread: msgs.filter((m) => m.role === 'user' && !m.read).length,
-    createdAt: c.createdAt,
-    originHost: c.originHost || null,
-  };
-}
-
-exports.getWidgetConversations = async (req, res, next) => {
-  try {
-    const { filter = 'all', search } = req.query;
-    const q = { companyId: req.companyId };
-    if (filter === 'active') { q.isResolved = false; q.handedToHuman = false; }
-    else if (filter === 'needs_human') { q.handedToHuman = true; q.isResolved = false; }
-    else if (filter === 'resolved') q.isResolved = true;
-
-    if (search?.trim()) {
-      const rx = { $regex: search.trim(), $options: 'i' };
-      q.$or = [{ visitorName: rx }, { visitorEmail: rx }, { sessionId: rx }];
-    }
-
-    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-    const activeThreshold = new Date(Date.now() - 5 * 60 * 1000);
-
-    const [convos, totalToday, activeNow, needsHuman, resolved] = await Promise.all([
-      WidgetConversation.find(q).populate('assignedTo', 'name').sort({ lastMessageAt: -1 }).limit(200).lean(),
-      WidgetConversation.countDocuments({ companyId: req.companyId, createdAt: { $gte: startOfToday } }),
-      WidgetConversation.countDocuments({ companyId: req.companyId, isResolved: false, lastMessageAt: { $gte: activeThreshold } }),
-      WidgetConversation.countDocuments({ companyId: req.companyId, handedToHuman: true, isResolved: false }),
-      WidgetConversation.countDocuments({ companyId: req.companyId, isResolved: true }),
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: convos.map(listItem),
-      counts: { totalToday, activeNow, needsHuman, resolved },
-    });
-  } catch (err) { next(err); }
-};
-
-exports.getWidgetConversation = async (req, res, next) => {
-  try {
-    const convo = await WidgetConversation.findOne({ _id: req.params.id, companyId: req.companyId }).populate('assignedTo', 'name');
-    if (!convo) return next(new AppError('Conversation not found.', 404));
-
-    let touched = false;
-    convo.messages.forEach((m) => { if (m.role === 'user' && !m.read) { m.read = true; touched = true; } });
-    if (touched) await convo.save();
-
-    res.status(200).json({ success: true, data: convo });
-  } catch (err) { next(err); }
-};
-
-exports.humanReply = async (req, res, next) => {
-  try {
-    const { message } = req.body;
-    if (!message?.trim()) return next(new AppError('Message is required.', 400));
-
-    const convo = await WidgetConversation.findOne({ _id: req.params.id, companyId: req.companyId });
-    if (!convo) return next(new AppError('Conversation not found.', 404));
-    if (!convo.handedToHuman) return next(new AppError('Take over this conversation before replying.', 400));
-    if (convo.assignedTo && String(convo.assignedTo) !== String(req.user._id)) {
-      return next(new AppError('This conversation is assigned to another agent.', 403));
-    }
-    if (!convo.assignedTo) convo.assignedTo = req.user._id;
-
-    convo.messages.push({ role: 'assistant', content: message.trim(), sentBy: 'human', agentName: req.user.name, read: true });
-    convo.lastMessageAt = new Date();
-    await convo.save();
-
-    io(req)?.to(`company:${req.companyId}`).emit('widget:new_message', { conversationId: convo._id });
-
-    res.status(200).json({ success: true, data: convo.messages[convo.messages.length - 1] });
-  } catch (err) { next(err); }
-};
-
-exports.takeoverConversation = async (req, res, next) => {
-  try {
-    const convo = await WidgetConversation.findOne({ _id: req.params.id, companyId: req.companyId });
-    if (!convo) return next(new AppError('Conversation not found.', 404));
-    if (convo.assignedTo && String(convo.assignedTo) !== String(req.user._id)) {
-      return next(new AppError('Already claimed by another agent.', 409));
-    }
-
-    convo.handedToHuman = true;
-    convo.assignedTo = req.user._id;
-    if (!convo.handoverRequestedAt) convo.handoverRequestedAt = new Date();
-    await convo.save();
-
-    io(req)?.to(`company:${req.companyId}`).emit('widget:conversation_updated', { conversationId: convo._id });
-
-    const populated = await convo.populate('assignedTo', 'name');
-    res.status(200).json({ success: true, data: populated });
-  } catch (err) { next(err); }
-};
-
-exports.resolveConversation = async (req, res, next) => {
-  try {
-    const convo = await WidgetConversation.findOne({ _id: req.params.id, companyId: req.companyId });
-    if (!convo) return next(new AppError('Conversation not found.', 404));
-
-    convo.isResolved = true;
-    convo.resolvedAt = new Date();
-    await convo.save();
-
-    io(req)?.to(`company:${req.companyId}`).emit('widget:conversation_updated', { conversationId: convo._id });
-    res.status(200).json({ success: true, data: convo });
-  } catch (err) { next(err); }
-};
-
-exports.sendToAI = async (req, res, next) => {
-  try {
-    const convo = await WidgetConversation.findOne({ _id: req.params.id, companyId: req.companyId });
-    if (!convo) return next(new AppError('Conversation not found.', 404));
-
-    convo.handedToHuman = false;
-    convo.assignedTo = null;
-    convo.handoverRequestedAt = null;
-    convo.isResolved = false;
-    await convo.save();
-
-    io(req)?.to(`company:${req.companyId}`).emit('widget:conversation_updated', { conversationId: convo._id });
-    res.status(200).json({ success: true, data: convo });
-  } catch (err) { next(err); }
-};
+// Conversations live in the shared inbox — see controllers/inboxController.js.
 
 exports.getWidgetSettings = async (req, res, next) => {
   try {

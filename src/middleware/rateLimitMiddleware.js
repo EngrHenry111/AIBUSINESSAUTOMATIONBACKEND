@@ -74,6 +74,14 @@ const widgetMessageLimiter = createLimiter(
   'You’ve sent a lot of messages. Please try again in an hour.'
 );
 
+// The widget polls its chat history so a visitor sees the team's replies
+// (every 5–30s, only while a chat exists). Its own per-IP budget keeps that
+// polling from using up the general or message limits.
+const widgetHistoryLimiter = createLimiter(
+  15 * 60 * 1000, 400,
+  'Too many requests. Please try again in a few minutes.'
+);
+
 // School parent pages (admission form, fee lookup/payment, portal sign-in).
 // Separate from authLimiter so parents on a school's shared network can't
 // use up staff login attempts — and tight enough to stop admission-number
@@ -83,4 +91,4 @@ const schoolParentLimiter = createLimiter(
   'Too many attempts. Please wait a few minutes and try again.'
 );
 
-module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter, widgetMessageLimiter, schoolParentLimiter };
+module.exports = { generalLimiter, authLimiter, uploadLimiter, aiLimiter, publicStoreLimiter, widgetMessageLimiter, widgetHistoryLimiter, schoolParentLimiter };
