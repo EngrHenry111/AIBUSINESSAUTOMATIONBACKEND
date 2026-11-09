@@ -179,6 +179,7 @@ app.use(trackRequestRate);
 const jsonParser = express.json({ limit: '10mb' });
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/v1/payments/webhook')) return next();
+  if (req.originalUrl.startsWith('/api/v1/webhooks/whatsapp')) return next(); // raw body, signed by Meta
   return jsonParser(req, res, next);
 });
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -214,7 +215,9 @@ if (process.env.NODE_ENV !== 'test') {
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 // Widget history polling has its own limiter (widgetRoutes) — see widgetHistoryLimiter.
 const isWidgetHistoryPath = (req) => /^\/api\/v1\/widget\/[^/]+\/history\//.test(req.originalUrl);
-app.use('/api', (req, res, next) => (isWidgetHistoryPath(req) ? next() : generalLimiter(req, res, next)));
+// Meta's webhook servers are not visitors: never rate-limit them (each POST is signature-checked).
+const isMetaWebhook = (req) => req.originalUrl.startsWith('/api/v1/webhooks/whatsapp');
+app.use('/api', (req, res, next) => (isWidgetHistoryPath(req) || isMetaWebhook(req) ? next() : generalLimiter(req, res, next)));
 app.use('/api/v1/documents/upload', uploadLimiter);
 // authLimiter is applied per-route inside authRoutes (login / register / password
 // reset only) so that /auth/me and /auth/refresh-token stay unthrottled.
@@ -264,6 +267,7 @@ app.use(`${API}/referrals`, referralRoutes);
 app.use(`${API}/store`, storefrontRoutes);
 app.use(`${API}/widget`, widgetRoutes);
 app.use(`${API}/inbox`, require('./routes/inboxRoutes'));
+app.use(`${API}/webhooks/whatsapp`, require('./routes/whatsappWebhookRoutes'));
 app.use(`${API}/payroll`, payrollRoutes);
 app.use(`${API}/card`, cardRoutes);
 app.use(`${API}/loyalty`, loyaltyRoutes);

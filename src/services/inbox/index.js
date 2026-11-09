@@ -96,6 +96,7 @@ async function answerFromKnowledge(companyId, text, convo, { floor, topK, keywor
  * @param {Object}   [p.meta]       stored on a new conversation
  * @param {Object}   [p.ai]         { floor, topK, keywordHandover }
  * @param {Object}   p.noAnswer     { reply, handover } — what to do when the AI can't answer
+ * @param {boolean}  [p.allowAI]    false for things the AI can't read (photos, voice notes)
  * @returns {Promise<{conversation, reply, waitingForHuman}>}
  *   reply is the text sent back (null when a human is handling the chat)
  */
@@ -103,6 +104,7 @@ async function receiveMessage({
   companyId, channel, externalId, text, name, email, phone, meta = {},
   ai = { floor: 0.15, topK: 3, keywordHandover: false },
   noAnswer = { reply: 'Please hold, connecting you to our team…', handover: true },
+  allowAI = true,
 }) {
   const body = String(text || '').trim();
   const typed = contactFromText(body);
@@ -153,7 +155,7 @@ async function receiveMessage({
   }
 
   let answer = null;
-  try { answer = await answerFromKnowledge(companyId, body, convo, ai); }
+  try { if (allowAI) answer = await answerFromKnowledge(companyId, body, convo, ai); }
   catch (err) { logger.error(`Inbox AI reply failed (${channel}): ${err.message}`); }
 
   if (!answer) {

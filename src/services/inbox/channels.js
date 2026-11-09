@@ -10,8 +10,13 @@
 const logger = require('../../utils/logger');
 
 const adapters = {
-  // whatsapp-web.js session (required lazily: whatsappService requires the inbox).
-  whatsapp: (convo, text) => require('../whatsappService').sendToCustomer(convo.companyId, convo.externalId, text),
+  // Official Cloud API when the company has connected it; otherwise the
+  // older QR-code session (required lazily: both services require the inbox).
+  whatsapp: async (convo, text) => {
+    const cloud = require('../whatsappCloud');
+    if (await cloud.isConnected(convo.companyId)) return cloud.sendText(convo.companyId, convo.externalId, text);
+    return require('../whatsappService').sendToCustomer(convo.companyId, convo.externalId, text);
+  },
 
   // The website widget fetches new messages itself (it polls the chat history),
   // so saving the message on the conversation is all delivery takes.

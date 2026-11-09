@@ -151,6 +151,19 @@ const companySchema = new mongoose.Schema({
     },
   },
 
+  // Official WhatsApp Business Platform (Cloud API) number — see
+  // services/whatsappCloud.js. Incoming webhooks are routed to the company
+  // by phoneNumberId. The token never leaves the server (select:false + toJSON).
+  whatsappCloud: {
+    connected: { type: Boolean, default: false },
+    phoneNumberId: { type: String, trim: true },
+    wabaId: { type: String, trim: true },
+    accessToken: { type: String, select: false },
+    displayPhone: { type: String, trim: true },
+    verifiedName: { type: String, trim: true },
+    connectedAt: { type: Date },
+  },
+
   giftCardSettings: {
     enabled: { type: Boolean, default: true },
     minAmount: { type: Number, default: 500 },
@@ -247,6 +260,11 @@ companySchema.index({ owner: 1 });
 companySchema.index({ 'referral.code': 1 }, { unique: true, sparse: true });
 companySchema.index({ 'referral.referredBy': 1 });
 companySchema.index({ 'subscription.status': 1 });
+// One WhatsApp number belongs to one company; webhooks are routed by it.
+companySchema.index(
+  { 'whatsappCloud.phoneNumberId': 1 },
+  { unique: true, partialFilterExpression: { 'whatsappCloud.phoneNumberId': { $type: 'string' } } },
+);
 companySchema.index({ storeEnabled: 1, 'marketplace.category': 1 });
 companySchema.index({ storeEnabled: 1, 'marketplace.isFeatured': 1 });
 
@@ -321,6 +339,7 @@ companySchema.set('toJSON', {
         if (p) { delete p.apiKey; delete p.secretKey; delete p.webhookSecret; }
       }
     }
+    if (ret.whatsappCloud) delete ret.whatsappCloud.accessToken;
     delete ret.__v;
     return ret;
   },

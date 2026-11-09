@@ -137,7 +137,9 @@ function initialize(companyId, io) {
 
   client.initialize().catch((err) => {
     session.status = 'error';
-    session.error = `Could not start WhatsApp: ${err.message}`;
+    session.error = /Could not find Chrome|Failed to launch the browser/i.test(err.message)
+      ? 'The QR-code connection is not available on this server. Use "Official WhatsApp" above instead: it is free, needs no phone online, and never asks you to re-scan.'
+      : `Could not start WhatsApp: ${err.message}`;
     logger.error(`WhatsApp init failed for company ${key}: ${err.message}`);
     roomEmit(companyId, 'whatsapp:status', { companyId: key, status: 'error', error: session.error });
   });
