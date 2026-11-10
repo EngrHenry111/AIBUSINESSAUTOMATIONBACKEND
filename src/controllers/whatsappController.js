@@ -116,7 +116,10 @@ exports.disconnect = async (req, res, next) => {
 exports.sendTest = async (req, res, next) => {
   try {
     const { phone } = req.body;
-    if (!phone) return next(new AppError('Phone number is required.', 400));
+    const phoneDigits = String(phone || '').replace(/\D/g, '');
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      return next(new AppError('Enter the WhatsApp phone number to send the test to, e.g. 0801 234 5678. The message text is fixed by Meta.', 400));
+    }
 
     // A business can't start a WhatsApp chat with free text, so the official
     // test uses Meta's built-in "hello_world" template.
