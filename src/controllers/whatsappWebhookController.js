@@ -23,12 +23,26 @@ const WA_NO_ANSWER = { reply: 'Please hold, connecting you to our team…', hand
 // ── Verification handshake ────────────────────────────────────────────────
 // Read from the raw URL: express-mongo-sanitize (app.js) strips query keys
 // containing dots, which removes Meta's hub.mode / hub.verify_token / hub.challenge.
+// Tokens pasted into dashboards often pick up spaces or quotes at the ends.
+const cleanToken = (t) => String(t || '').trim().replace(/^["']+|["']+$/g, '').trim();
+
 exports.verify = (req, res) => {
-  const expected = process.env.WHATSAPP_VERIFY_TOKEN;
+  const expected = cleanToken(process.env.WHATSAPP_VERIFY_TOKEN);
   const q = new URLSearchParams(req.originalUrl.split('?')[1] || '');
-  if (expected && q.get('hub.mode') === 'subscribe' && q.get('hub.verify_token') === expected) {
+  const given = cleanToken(q.get('hub.verify_token'));
+  const mode = q.get('hub.mode');
+  if (expected && mode === 'subscribe' && given === expected) {
+    logger.info('WhatsApp webhook verified by Meta');
     return res.status(200).type('text/plain').send((q.get('hub.challenge') || '').replace(/[^\w-]/g, ''));
   }
+  // Say why, without printing either token.
+  let why;
+  if (!expected) why = 'WHATSAPP_VERIFY_TOKEN is not set on the server';
+  else if (mode !== 'subscribe') why = `unexpected hub.mode "${mode}"`;
+  else if (!given) why = 'Meta sent no verify token';
+  else if (given.toLowerCase() === expected.toLowerCase()) why = 'tokens differ only in capital letters';
+  else why = `tokens differ (Meta sent ${given.length} characters, server has ${expected.length})`;
+  logger.warn(`WhatsApp webhook verification failed: ${why}`);
   return res.sendStatus(403);
 };
 
