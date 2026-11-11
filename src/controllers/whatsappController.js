@@ -21,6 +21,8 @@ function cloudView(company, req) {
     displayPhone: wc.displayPhone || null,
     verifiedName: wc.verifiedName || null,
     connectedAt: wc.connectedAt || null,
+    // Connected by BizlyAI on its own account: the business never handles a token.
+    managed: Boolean(wc.managed),
     // Token health: replies stop when Meta refuses the token.
     needsReconnect: Boolean(wc.connected && wc.needsReconnect),
     lastError: wc.needsReconnect ? wc.lastError || null : null,
@@ -71,6 +73,7 @@ exports.connectCloud = async (req, res, next) => {
         'whatsappCloud.connectedAt': new Date(),
         'whatsappCloud.tokenExpiresAt': tokenExpiresAt,
         'whatsappCloud.needsReconnect': false,
+        'whatsappCloud.managed': false,
       },
       $unset: { 'whatsappCloud.lastError': 1, 'whatsappCloud.lastErrorAt': 1, 'whatsappCloud.alertedAt': 1 },
     }, { new: true }).select('whatsappCloud');
@@ -87,7 +90,7 @@ exports.connectCloud = async (req, res, next) => {
 exports.disconnectCloud = async (req, res, next) => {
   try {
     const company = await Company.findByIdAndUpdate(req.companyId, {
-      $set: { 'whatsappCloud.connected': false, 'whatsappCloud.needsReconnect': false },
+      $set: { 'whatsappCloud.connected': false, 'whatsappCloud.needsReconnect': false, 'whatsappCloud.managed': false },
       $unset: { 'whatsappCloud.accessToken': 1, 'whatsappCloud.phoneNumberId': 1 },
     }, { new: true }).select('whatsappCloud');
     cloud.forget(req.companyId);

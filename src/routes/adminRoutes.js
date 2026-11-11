@@ -35,6 +35,12 @@ router.patch('/companies/:id/plan', [
     .withMessage('Invalid plan'),
 ], validate, ctrl.changePlan);
 
+// ── WhatsApp numbers on BizlyAI's own account, connected for clients ─────
+const adminWhatsapp = require('../controllers/adminWhatsappController');
+router.get('/whatsapp', adminWhatsapp.overview);
+router.post('/whatsapp/connect', adminWhatsapp.connect);
+router.post('/whatsapp/disconnect', adminWhatsapp.disconnect);
+
 // ── Referrals ──────────────────────────────────────────────────────────────
 router.get('/referrals', referral.adminOverview);
 router.get('/referrals/:companyId/earnings', referral.adminEarnings);

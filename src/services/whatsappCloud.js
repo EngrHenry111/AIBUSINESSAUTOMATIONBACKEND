@@ -50,6 +50,28 @@ const digits = (phone) => {
   return n;
 };
 
+// ── BizlyAI's own WhatsApp Business Account (numbers connected by an admin) ──
+const clean = (v) => String(v || '').trim().replace(/^["']+|["']+$/g, '').trim();
+/** The platform account a super admin connects clients' numbers from (Render env). */
+function platform() {
+  return { token: clean(process.env.WHATSAPP_PLATFORM_TOKEN), wabaId: clean(process.env.WHATSAPP_PLATFORM_WABA_ID) };
+}
+
+/** Every number on the platform account, as Meta reports it. */
+async function platformNumbers() {
+  const { token, wabaId } = platform();
+  const { data } = await graph(`${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,status,quality_rating,name_status,code_verification_status&limit=100`, token);
+  return (data || []).map((n) => ({
+    id: String(n.id),
+    displayPhone: n.display_phone_number || '',
+    verifiedName: n.verified_name || '',
+    status: n.status || '',
+    quality: n.quality_rating || '',
+    nameStatus: n.name_status || '',
+    codeVerification: n.code_verification_status || '',
+  }));
+}
+
 // ── Credentials (cached briefly; a token change takes effect within a minute) ──
 const credCache = new Map(); // companyId -> { at, creds }
 const CACHE_MS = 60 * 1000;
@@ -64,9 +86,11 @@ async function credsFor(companyId) {
     // Name each field: selecting "whatsappCloud" together with its hidden
     // token is a MongoDB path collision.
     const company = await Company.findById(companyId)
-      .select('whatsappCloud.connected whatsappCloud.phoneNumberId whatsappCloud.accessToken').lean();
+      .select('whatsappCloud.connected whatsappCloud.managed whatsappCloud.phoneNumberId whatsappCloud.accessToken').lean();
     const wc = company?.whatsappCloud;
-    const creds = wc?.connected && wc.accessToken && wc.phoneNumberId ? { phoneNumberId: wc.phoneNumberId, token: wc.accessToken } : null;
+    // Managed numbers use BizlyAI's own token; the rest use their own.
+    const token = wc?.managed ? platform().token : wc?.accessToken;
+    const creds = wc?.connected && token && wc.phoneNumberId ? { phoneNumberId: wc.phoneNumberId, token } : null;
     credCache.set(key, { at: Date.now(), creds });
     return creds;
   } catch (err) {
@@ -159,4 +183,4 @@ async function verifyAndSubscribe({ phoneNumberId, wabaId, accessToken }) {
   };
 }
 
-module.exports = { sendText, sendTemplate, markRead, verifyAndSubscribe, tokenInfo, graph, isConnected, credsFor, forget, digits, GraphError };
+module.exports = { platform, platformNumbers, sendText, sendTemplate, markRead, verifyAndSubscribe, tokenInfo, graph, isConnected, credsFor, forget, digits, GraphError };

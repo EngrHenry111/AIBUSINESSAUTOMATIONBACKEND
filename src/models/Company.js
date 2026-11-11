@@ -164,6 +164,10 @@ const companySchema = new mongoose.Schema({
     connectedAt: { type: Date },
     // Token health (utils/whatsappTokenCheck.js): when it expires (null =
     // never), and whether Meta has refused it — replies stop until reconnected.
+    // managed = the number sits on BizlyAI's own WhatsApp Business Account and
+    // uses the platform token (WHATSAPP_PLATFORM_TOKEN), connected by a super
+    // admin. No token is stored on the company; BizlyAI keeps it working.
+    managed: { type: Boolean, default: false },
     tokenExpiresAt: { type: Date, default: null },
     needsReconnect: { type: Boolean, default: false },
     lastError: { type: String },
