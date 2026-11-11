@@ -47,7 +47,7 @@ exports.verify = (req, res) => {
 };
 
 function validSignature(raw, header) {
-  const secret = process.env.META_APP_SECRET;
+  const secret = cleanToken(process.env.META_APP_SECRET);
   if (!secret || !raw || typeof header !== 'string' || !header.startsWith('sha256=')) return false;
   const expected = Buffer.from(crypto.createHmac('sha256', secret).update(raw).digest('hex'));
   const given = Buffer.from(header.slice(7));
@@ -146,7 +146,14 @@ async function handleChange(value) {
 // ── Incoming events ───────────────────────────────────────────────────────
 exports.receive = (req, res) => {
   if (!validSignature(req.body, req.headers['x-hub-signature-256'])) {
-    logger.warn('WhatsApp webhook rejected: bad or missing signature (is META_APP_SECRET set?)');
+    // Say why, without printing the secret. A Meta App Secret is 32 hex characters.
+    const s = cleanToken(process.env.META_APP_SECRET);
+    let why;
+    if (!s) why = 'META_APP_SECRET is not set on the server';
+    else if (!/^[0-9a-f]{32}$/i.test(s)) why = `META_APP_SECRET doesn't look like an App Secret (${s.length} characters; it should be 32 letters/digits from App settings → Basic)`;
+    else if (!req.headers['x-hub-signature-256']) why = 'request had no signature (not from Meta?)';
+    else why = 'signature does not match — META_APP_SECRET is from a different app, or was reset in Meta';
+    logger.warn(`WhatsApp webhook rejected: ${why}`);
     return res.sendStatus(401);
   }
   // Answer Meta at once; the AI reply can take a few seconds.
