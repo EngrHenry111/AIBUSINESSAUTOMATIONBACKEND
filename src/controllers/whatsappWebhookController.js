@@ -32,7 +32,7 @@ exports.verify = (req, res) => {
   const given = cleanToken(q.get('hub.verify_token'));
   const mode = q.get('hub.mode');
   if (expected && mode === 'subscribe' && given === expected) {
-    logger.info('WhatsApp webhook verified by Meta');
+    logger.warn('WhatsApp webhook verified by Meta ✓');
     return res.status(200).type('text/plain').send((q.get('hub.challenge') || '').replace(/[^\w-]/g, ''));
   }
   // Say why, without printing either token.
@@ -114,7 +114,8 @@ async function handleChange(value) {
   const company = await Company.findOne({ 'whatsappCloud.phoneNumberId': phoneNumberId, 'whatsappCloud.connected': true })
     .select('_id status').lean();
   if (!company) { logger.warn(`WhatsApp webhook for unknown number ${phoneNumberId} — ignored`); return; }
-  if (company.status !== 'active') return;
+  if (company.status !== 'active') { logger.warn(`WhatsApp webhook: company ${company._id} is ${company.status} — message ignored`); return; }
+  logger.warn(`WhatsApp webhook: ${value.messages.length} message(s) received for ${value.metadata.display_phone_number || phoneNumberId}`);
 
   const names = Object.fromEntries((value.contacts || []).map((c) => [c.wa_id, c.profile?.name]));
 
@@ -153,7 +154,10 @@ exports.receive = (req, res) => {
 
   let payload;
   try { payload = JSON.parse(req.body.toString('utf8')); } catch { return undefined; }
-  if (payload?.object !== 'whatsapp_business_account') return undefined;
+  if (payload?.object !== 'whatsapp_business_account') {
+    logger.warn(`WhatsApp webhook: ignored an event for "${payload?.object}"`);
+    return undefined;
+  }
 
   (async () => {
     for (const entry of payload.entry || []) {
