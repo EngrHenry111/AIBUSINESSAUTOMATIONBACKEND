@@ -92,7 +92,7 @@ async function sendText(companyId, to, text) {
     });
     return { success: true, messageId: data.messages?.[0]?.id };
   } catch (err) {
-    if (err.code === 190) forget(companyId);
+    if (err.code === 190) tokenBroken(companyId, err.message);
     logger.warn(`WhatsApp Cloud send failed (company ${companyId}): ${err.message}`);
     return { success: false, reason: err.message, code: err.code };
   }
@@ -109,6 +109,7 @@ async function sendTemplate(companyId, to, name, language = 'en_US') {
     });
     return { success: true, messageId: data.messages?.[0]?.id };
   } catch (err) {
+    if (err.code === 190) tokenBroken(companyId, err.message);
     return { success: false, reason: err.message, code: err.code };
   }
 }
@@ -122,6 +123,24 @@ async function markRead(companyId, messageId) {
       method: 'POST', body: { messaging_product: 'whatsapp', status: 'read', message_id: messageId },
     });
   } catch { /* cosmetic only */ }
+}
+
+// ── Token health ───────────────────────────────────────────────────────────
+/** Meta refused the token (expired / revoked): flag it and tell the business. */
+function tokenBroken(companyId, reason) {
+  forget(companyId);
+  // Lazy require: the checker requires this module too.
+  require('../utils/whatsappTokenCheck').flagBroken(companyId, reason).catch(() => {});
+}
+
+/**
+ * When does this token stop working? A token may inspect itself.
+ * @returns {Promise<{valid: boolean, expiresAt: Date|null}>} expiresAt null = never
+ */
+async function tokenInfo(accessToken) {
+  const { data } = await graph(`debug_token?input_token=${encodeURIComponent(accessToken)}`, accessToken);
+  const exp = Number(data?.expires_at) || 0;
+  return { valid: data?.is_valid !== false, expiresAt: exp > 0 ? new Date(exp * 1000) : null };
 }
 
 // ── Connecting a number ────────────────────────────────────────────────────
@@ -140,4 +159,4 @@ async function verifyAndSubscribe({ phoneNumberId, wabaId, accessToken }) {
   };
 }
 
-module.exports = { sendText, sendTemplate, markRead, verifyAndSubscribe, isConnected, credsFor, forget, digits, GraphError };
+module.exports = { sendText, sendTemplate, markRead, verifyAndSubscribe, tokenInfo, graph, isConnected, credsFor, forget, digits, GraphError };

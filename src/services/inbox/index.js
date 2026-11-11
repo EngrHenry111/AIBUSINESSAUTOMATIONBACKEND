@@ -14,7 +14,7 @@
  */
 const Conversation = require('../../models/Conversation');
 const { getEmbedding } = require('../embeddingService');
-const { generateWhatsAppReply } = require('../groqService');
+const { generateSalesReply, HANDOVER_TOKEN } = require('../groqService');
 const { hybridSearch, rerankChunks } = require('../../utils/hybridSearch');
 const { customerFacingChunks } = require('../../utils/customerKnowledge');
 const { cleanAIText } = require('../../utils/cleanAIText');
@@ -22,6 +22,7 @@ const { captureLead, contactFromText, excerpt } = require('../../utils/leadCaptu
 const logger = require('../../utils/logger');
 const { attachContact, linkLead } = require('./contacts');
 const channels = require('./channels');
+const { catalogContext, customerContext } = require('./salesContext');
 
 // Lead source + timeline label for each channel.
 const LEAD_SOURCE = {
@@ -50,9 +51,10 @@ function pushMessage(convo, msg) {
   return lastOf(convo);
 }
 
-// ── Knowledge-grounded AI answer ──────────────────────────────────────────
+// ── AI answer: knowledge + live catalog + this customer ───────────────────
 /**
  * @returns {Promise<{reply, sources}|null>} null when the AI should not answer
+ *   (nothing to answer from, or the model asked for a person)
  */
 async function answerFromKnowledge(companyId, text, convo, { floor, topK, keywordHandover }) {
   if (keywordHandover) {
@@ -60,27 +62,39 @@ async function answerFromKnowledge(companyId, text, convo, { floor, topK, keywor
     if (HANDOVER_KEYWORDS.some((k) => lower.includes(k))) return null;
   }
 
-  const chunks = await customerFacingChunks(companyId);
-  if (!chunks.length) return null;
+  const [chunks, catalog] = await Promise.all([customerFacingChunks(companyId), catalogContext(companyId, text)]);
+  if (!chunks.length && !catalog.text) return null;
 
-  let embedding = null;
-  try { embedding = await getEmbedding(text); }
-  catch { logger.warn('Embedding service down — inbox AI using keyword search only'); }
+  // Knowledge base passages, only when they actually match the question.
+  let knowledge = '';
+  let sources = [];
+  if (chunks.length) {
+    let embedding = null;
+    try { embedding = await getEmbedding(text); }
+    catch { logger.warn('Embedding service down — inbox AI using keyword search only'); }
+    const ranked = rerankChunks(hybridSearch(chunks, embedding, text, { topK }), text);
+    if (ranked.length && (ranked[0].rerankScore || 0) >= floor) {
+      const top = ranked.slice(0, topK);
+      knowledge = top.map((r) => r.chunk).join('\n\n---\n\n');
+      sources = [...new Set(top.map((r) => r.source).filter(Boolean))];
+    }
+  }
+  // No catalog and nothing relevant in the knowledge base: a person answers.
+  if (!knowledge && !catalog.text) return null;
 
-  const ranked = rerankChunks(hybridSearch(chunks, embedding, text, { topK }), text);
-  if (!ranked.length || (ranked[0].rerankScore || 0) < floor) return null;
-
-  const top = ranked.slice(0, topK);
-  const context = top.map((r) => r.chunk).join('\n\n---\n\n');
+  const customer = await customerContext(convo, { storeUrl: catalog.storeUrl });
   const history = convo.messages
     .slice(0, -1)
-    .filter((m) => m.from !== 'system')
+    .filter((m) => m.from !== 'system' || m.notice)
     .slice(-8)
     .map((m) => ({ role: m.from === 'customer' ? 'user' : 'assistant', content: m.content }));
 
-  const reply = cleanAIText(await generateWhatsAppReply(context, text, history));
-  if (!reply) return null;
-  return { reply, sources: [...new Set(top.map((r) => r.source).filter(Boolean))] };
+  const reply = cleanAIText(await generateSalesReply({
+    businessName: catalog.businessName, knowledge, catalog: catalog.text, customer, question: text, history,
+  }));
+  if (!reply || reply === HANDOVER_TOKEN) return null;
+  if (catalog.text) sources.push('Product catalog');
+  return { reply, sources };
 }
 
 // ── Inbound ───────────────────────────────────────────────────────────────

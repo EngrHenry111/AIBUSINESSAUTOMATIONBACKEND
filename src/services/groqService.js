@@ -171,6 +171,44 @@ ${PLAIN_TEXT_RULE}`;
 }
 
 /**
+ * The inbox sales assistant: answers a customer from the business's
+ * knowledge, live product catalog and what's known about this customer.
+ * Returns HANDOVER_TOKEN when a person should take it.
+ */
+const HANDOVER_TOKEN = '[HANDOVER]';
+async function generateSalesReply({ businessName, knowledge, catalog, customer, question, history = [] }) {
+  const systemPrompt = `You are the sales and customer assistant for ${businessName || 'this business'}, chatting with a customer on WhatsApp or the website.
+Use ONLY the information below (business information, product catalog, customer details). Never invent products, prices, discounts, stock, delivery times or policies.
+
+How to help:
+1. Product questions: recommend matching products with their exact price and availability. Mention at most 4 products, most relevant first. Include a product's link when they want to buy or see it.
+2. "What do you sell?": summarise the kinds of products and name a few popular ones with prices, then ask what they're looking for.
+3. If something is out of stock, say so and suggest a similar in-stock product if there is one.
+4. To order: send the product link or store link. Never take payment details in chat.
+5. Order questions: use the customer's recent orders (status, payment, tracking link). Only discuss orders listed for this customer.
+6. Greet a returning customer by name when you know it, and use what they asked before when it helps. Don't recite their history.
+7. If you can't answer from the information, or they want a person, a refund, a complaint handled, a custom deal or anything you're unsure of, reply with exactly ${HANDOVER_TOKEN} and nothing else.
+
+Style: warm, short and natural, like a helpful shop assistant on WhatsApp. 1 to 4 short sentences, or a short list with one product per line. Never mention "context", "catalog data" or "information provided".
+${PLAIN_TEXT_RULE}`;
+
+  const sections = [];
+  if (knowledge) sections.push(`BUSINESS INFORMATION:\n${knowledge}`);
+  if (catalog) sections.push(`PRODUCT CATALOG:\n${catalog}`);
+  if (customer) sections.push(`THIS CUSTOMER:\n${customer}`);
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.slice(-8),
+    { role: 'user', content: `${sections.join('\n\n---\n\n')}\n\n---\nCUSTOMER MESSAGE: ${question}` },
+  ];
+
+  const response = await complete({ messages, model: MODELS.SMART, maxTokens: 500, temperature: 0.3 });
+  const text = cleanAIText(response.choices[0].message.content || '');
+  return text.includes(HANDOVER_TOKEN) ? HANDOVER_TOKEN : text;
+}
+
+/**
  * Generic agent execution
  */
 async function runAgent(agentType, input, options = {}) {
@@ -231,4 +269,4 @@ async function generateStructured(prompt, schema, agentType = 'knowledge_assista
   }
 }
 
-module.exports = { complete, generateAnswer, generateWhatsAppReply, runAgent, streamAnswer, generateStructured, MODELS };
+module.exports = { complete, generateAnswer, generateWhatsAppReply, generateSalesReply, HANDOVER_TOKEN, runAgent, streamAnswer, generateStructured, MODELS };

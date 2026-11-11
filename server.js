@@ -120,6 +120,11 @@ async function bootstrap() {
     }, 60 * 60 * 1000);
     logger.info('✅ Recurring invoice processor scheduled (runs daily at 8am, checked hourly)');
 
+    // ── Official WhatsApp tokens — catch dead / expiring ones daily ─────────
+    const { checkAllTokens } = require('./src/utils/whatsappTokenCheck');
+    setTimeout(() => checkAllTokens().catch((e) => logger.error(`WhatsApp token check failed: ${e.message}`)), 60 * 1000);
+    setInterval(() => checkAllTokens().catch((e) => logger.error(`WhatsApp token check failed: ${e.message}`)), 24 * 60 * 60 * 1000);
+
     // ── Loyalty points expiry — sweep stale points daily at 3am ─────────────
     const { expireOldPoints } = require('./src/utils/loyaltyPoints');
     expireOldPoints().catch((e) => logger.error(`expireOldPoints (startup) failed: ${e.message}`));

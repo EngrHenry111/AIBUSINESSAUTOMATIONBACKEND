@@ -21,6 +21,10 @@ function cloudView(company, req) {
     displayPhone: wc.displayPhone || null,
     verifiedName: wc.verifiedName || null,
     connectedAt: wc.connectedAt || null,
+    // Token health: replies stop when Meta refuses the token.
+    needsReconnect: Boolean(wc.connected && wc.needsReconnect),
+    lastError: wc.needsReconnect ? wc.lastError || null : null,
+    tokenExpiresAt: wc.tokenExpiresAt || null,
     // What the platform owner sets once in the Meta app (Webhooks).
     webhookUrl: webhookUrl(req),
     webhookReady: Boolean(process.env.WHATSAPP_VERIFY_TOKEN && process.env.META_APP_SECRET),
@@ -52,6 +56,9 @@ exports.connectCloud = async (req, res, next) => {
     } catch (err) {
       return next(new AppError(`Meta did not accept these details: ${err.message}`, 400));
     }
+    // When does this token stop working? (null = never). Best effort.
+    let tokenExpiresAt = null;
+    try { tokenExpiresAt = (await cloud.tokenInfo(accessToken)).expiresAt; } catch { /* unknown */ }
 
     const company = await Company.findByIdAndUpdate(req.companyId, {
       $set: {
@@ -62,7 +69,10 @@ exports.connectCloud = async (req, res, next) => {
         'whatsappCloud.displayPhone': info.displayPhone,
         'whatsappCloud.verifiedName': info.verifiedName,
         'whatsappCloud.connectedAt': new Date(),
+        'whatsappCloud.tokenExpiresAt': tokenExpiresAt,
+        'whatsappCloud.needsReconnect': false,
       },
+      $unset: { 'whatsappCloud.lastError': 1, 'whatsappCloud.lastErrorAt': 1, 'whatsappCloud.alertedAt': 1 },
     }, { new: true }).select('whatsappCloud');
     cloud.forget(req.companyId);
 
@@ -77,7 +87,7 @@ exports.connectCloud = async (req, res, next) => {
 exports.disconnectCloud = async (req, res, next) => {
   try {
     const company = await Company.findByIdAndUpdate(req.companyId, {
-      $set: { 'whatsappCloud.connected': false },
+      $set: { 'whatsappCloud.connected': false, 'whatsappCloud.needsReconnect': false },
       $unset: { 'whatsappCloud.accessToken': 1, 'whatsappCloud.phoneNumberId': 1 },
     }, { new: true }).select('whatsappCloud');
     cloud.forget(req.companyId);

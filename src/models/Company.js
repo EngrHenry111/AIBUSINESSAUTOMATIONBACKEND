@@ -162,6 +162,13 @@ const companySchema = new mongoose.Schema({
     displayPhone: { type: String, trim: true },
     verifiedName: { type: String, trim: true },
     connectedAt: { type: Date },
+    // Token health (utils/whatsappTokenCheck.js): when it expires (null =
+    // never), and whether Meta has refused it — replies stop until reconnected.
+    tokenExpiresAt: { type: Date, default: null },
+    needsReconnect: { type: Boolean, default: false },
+    lastError: { type: String },
+    lastErrorAt: { type: Date },
+    alertedAt: { type: Date }, // last time the owner was told (once a day at most)
   },
 
   giftCardSettings: {
