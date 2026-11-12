@@ -119,7 +119,7 @@ exports.updateLead = async (req, res, next) => {
 
 // ── GET/PUT /leads/capture-settings ────────────────────────────────────
 // Which channels add leads by themselves, and AI scoring on arrival.
-const CAPTURE_KEYS = ['chat', 'whatsapp', 'store', 'card', 'aiScoring', 'aiStages', 'followUps', 'teamReminders'];
+const CAPTURE_KEYS = ['chat', 'whatsapp', 'telegram', 'store', 'card', 'aiScoring', 'aiStages', 'followUps', 'teamReminders'];
 const captureSettingsOf = (company) => ({
   ...Object.fromEntries(CAPTURE_KEYS.map((k) => [k, company?.leadCapture?.[k] !== false])),
   followUpAfterHours: Number(company?.leadCapture?.followUpAfterHours) || 3,

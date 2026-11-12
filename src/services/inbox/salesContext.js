@@ -161,7 +161,10 @@ async function customerContext(convo, { storeUrl } = {}) {
     if (name) lines.push(`Name: ${name}`);
     if (contact?.firstSeenAt) lines.push(`First contacted the business: ${day(contact.firstSeenAt)}`);
 
-    // Orders placed with this phone number (or the contact's email).
+    // Orders placed with this phone number (or the contact's email). On
+    // Telegram a typed number proves nothing — only one shared with the
+    // "Share my phone number" button does.
+    if (convo.channel === 'telegram' && !convo.meta?.phoneVerified) return lines.join('\n');
     const phone = convo.phone || contact?.phone;
     const key = Contact.phoneKeyOf(phone);
     const or = [];

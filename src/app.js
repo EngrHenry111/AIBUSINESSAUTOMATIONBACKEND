@@ -180,6 +180,7 @@ const jsonParser = express.json({ limit: '10mb' });
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/v1/payments/webhook')) return next();
   if (req.originalUrl.startsWith('/api/v1/webhooks/whatsapp')) return next(); // raw body, signed by Meta
+  if (req.originalUrl.startsWith('/api/v1/webhooks/telegram')) return next(); // parsed in its router, unescaped
   return jsonParser(req, res, next);
 });
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -216,7 +217,8 @@ if (process.env.NODE_ENV !== 'test') {
 // Widget history polling has its own limiter (widgetRoutes) — see widgetHistoryLimiter.
 const isWidgetHistoryPath = (req) => /^\/api\/v1\/widget\/[^/]+\/history\//.test(req.originalUrl);
 // Meta's webhook servers are not visitors: never rate-limit them (each POST is signature-checked).
-const isMetaWebhook = (req) => req.originalUrl.startsWith('/api/v1/webhooks/whatsapp');
+// Same for Telegram (each POST carries the bot's secret header).
+const isMetaWebhook = (req) => req.originalUrl.startsWith('/api/v1/webhooks/whatsapp') || req.originalUrl.startsWith('/api/v1/webhooks/telegram');
 app.use('/api', (req, res, next) => (isWidgetHistoryPath(req) || isMetaWebhook(req) ? next() : generalLimiter(req, res, next)));
 app.use('/api/v1/documents/upload', uploadLimiter);
 // authLimiter is applied per-route inside authRoutes (login / register / password
@@ -268,6 +270,8 @@ app.use(`${API}/store`, storefrontRoutes);
 app.use(`${API}/widget`, widgetRoutes);
 app.use(`${API}/inbox`, require('./routes/inboxRoutes'));
 app.use(`${API}/webhooks/whatsapp`, require('./routes/whatsappWebhookRoutes'));
+app.use(`${API}/webhooks/telegram`, require('./routes/telegramWebhookRoutes'));
+app.use(`${API}/telegram`, require('./routes/telegramRoutes'));
 app.use(`${API}/payroll`, payrollRoutes);
 app.use(`${API}/card`, cardRoutes);
 app.use(`${API}/loyalty`, loyaltyRoutes);

@@ -175,6 +175,23 @@ const companySchema = new mongoose.Schema({
     alertedAt: { type: Date }, // last time the owner was told (once a day at most)
   },
 
+  // Telegram bot the business made with @BotFather (services/telegram.js).
+  // Updates arrive at /webhooks/telegram/<companyId>, each carrying
+  // webhookSecret in a header. Token + secret never leave the server.
+  telegram: {
+    connected: { type: Boolean, default: false },
+    botToken: { type: String, select: false },
+    webhookSecret: { type: String, select: false },
+    botId: { type: String, trim: true },
+    botUsername: { type: String, trim: true },
+    botName: { type: String, trim: true },
+    connectedAt: { type: Date },
+    needsReconnect: { type: Boolean, default: false },
+    lastError: { type: String },
+    lastErrorAt: { type: Date },
+    alertedAt: { type: Date },
+  },
+
   giftCardSettings: {
     enabled: { type: Boolean, default: true },
     minAmount: { type: Number, default: 500 },
@@ -217,12 +234,13 @@ const companySchema = new mongoose.Schema({
   leadCapture: {
     chat: { type: Boolean, default: true },
     whatsapp: { type: Boolean, default: true },
+    telegram: { type: Boolean, default: true },
     store: { type: Boolean, default: true },
     card: { type: Boolean, default: true },
     aiScoring: { type: Boolean, default: true },
     // Sales follow-up (services/inbox/salesFollowUp.js)
     aiStages: { type: Boolean, default: true },       // AI moves leads along the pipeline from chats
-    followUps: { type: Boolean, default: true },      // AI nudges interested WhatsApp customers who went quiet
+    followUps: { type: Boolean, default: true },      // AI nudges interested WhatsApp / Telegram customers who went quiet
     followUpAfterHours: { type: Number, default: 3, min: 1, max: 20 },
     teamReminders: { type: Boolean, default: true },  // email the team about hot customers left waiting
   },
@@ -280,6 +298,10 @@ companySchema.index({ 'subscription.status': 1 });
 companySchema.index(
   { 'whatsappCloud.phoneNumberId': 1 },
   { unique: true, partialFilterExpression: { 'whatsappCloud.phoneNumberId': { $type: 'string' } } },
+);
+companySchema.index(
+  { 'telegram.botId': 1 },
+  { unique: true, partialFilterExpression: { 'telegram.botId': { $type: 'string' } } },
 );
 companySchema.index({ storeEnabled: 1, 'marketplace.category': 1 });
 companySchema.index({ storeEnabled: 1, 'marketplace.isFeatured': 1 });
@@ -356,6 +378,7 @@ companySchema.set('toJSON', {
       }
     }
     if (ret.whatsappCloud) delete ret.whatsappCloud.accessToken;
+    if (ret.telegram) { delete ret.telegram.botToken; delete ret.telegram.webhookSecret; }
     delete ret.__v;
     return ret;
   },

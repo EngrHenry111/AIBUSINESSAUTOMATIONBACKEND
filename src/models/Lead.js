@@ -11,7 +11,7 @@ const leadSchema = new mongoose.Schema({
   position: { type: String, trim: true },
   source: {
     type: String,
-    enum: ['website', 'referral', 'social', 'email', 'cold_call', 'event', 'other', 'chat_widget', 'whatsapp', 'store', 'business_card'],
+    enum: ['website', 'referral', 'social', 'email', 'cold_call', 'event', 'other', 'chat_widget', 'whatsapp', 'telegram', 'store', 'business_card'],
     default: 'other',
   },
   status: {
@@ -44,7 +44,7 @@ const leadSchema = new mongoose.Schema({
     analyzedAt: Date,
   },
   activities: [{
-    type: { type: String, enum: ['email', 'call', 'meeting', 'note', 'status_change', 'chat', 'whatsapp', 'order', 'system'] },
+    type: { type: String, enum: ['email', 'call', 'meeting', 'note', 'status_change', 'chat', 'whatsapp', 'telegram', 'order', 'system'] },
     description: String,
     performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     performedAt: { type: Date, default: Date.now },

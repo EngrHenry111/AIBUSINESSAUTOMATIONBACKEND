@@ -16,7 +16,7 @@ const logger = require('./logger');
 const { analyzeLeadRecord } = require('./leadAnalysis');
 
 // Lead source → Company.leadCapture switch that controls it.
-const CHANNEL_OF = { chat_widget: 'chat', whatsapp: 'whatsapp', store: 'store', business_card: 'card' };
+const CHANNEL_OF = { chat_widget: 'chat', whatsapp: 'whatsapp', telegram: 'telegram', store: 'store', business_card: 'card' };
 const CLOSED = ['won', 'lost', 'converted'];
 // Repeat messages within this window update the lead without adding another
 // timeline entry, so a 20-message chat is one activity, not twenty.

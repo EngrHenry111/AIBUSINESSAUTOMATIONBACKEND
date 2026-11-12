@@ -29,9 +29,11 @@ const channels = require('./channels');
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
-// Channels where the business may message a customer within 24h of their
-// last message for free. (Messenger, Instagram and Telegram join later.)
-const FOLLOW_UP_CHANNELS = ['whatsapp'];
+// Channels where the business can reach a quiet customer (WhatsApp: free
+// inside 24h of their last message; Telegram has no limit, but a nudge
+// a day later would feel stale, so the same window applies).
+const FOLLOW_UP_CHANNELS = ['whatsapp', 'telegram'];
+const CHANNEL_LABEL = { whatsapp: 'WhatsApp', telegram: 'Telegram', widget: 'Website chat' };
 const WINDOW_MS = 23 * HOUR;          // stay safely inside the 24h window
 const ANALYZE_EVERY_MS = 10 * MIN;    // at most one stage check per chat per 10 min
 const ANALYSES_PER_DAY = 300;         // per company — keeps the AI bill at zero on free tiers
@@ -245,7 +247,7 @@ async function sendFollowUp(convo, settings) {
   emit(convo.companyId, 'inbox:new_message', { conversationId: convo._id, channel: convo.channel, message: saved?.messages?.[0] || message, status: convo.status });
 
   if (lead) {
-    lead.activities.push({ type: convo.channel === 'whatsapp' ? 'whatsapp' : 'chat', description: `AI follow-up sent: "${text.slice(0, 200)}"`, performedAt: now });
+    lead.activities.push({ type: ['whatsapp', 'telegram'].includes(convo.channel) ? convo.channel : 'chat', description: `AI follow-up sent: "${text.slice(0, 200)}"`, performedAt: now });
     lead.lastContactedAt = now;
     await lead.save().catch(() => {});
     emit(convo.companyId, 'leads:update', { leadId: lead._id });
@@ -289,7 +291,7 @@ async function remindTeams(now) {
     const rows = chats.slice(0, 15).map((c) => `
       <tr><td style="padding:8px 0;border-bottom:1px solid #e2e8f0;">
         <strong style="color:#0f172a;">${escapeHtml(c.displayName || c.phone || 'Customer')}</strong>
-        <span style="color:#64748b;font-size:12px;"> · ${c.channel === 'whatsapp' ? 'WhatsApp' : 'Website chat'} · ${STAGE_LABEL[c.sales.stage]} · waiting ${Math.round((now - new Date(c.lastCustomerAt)) / HOUR)}h</span>
+        <span style="color:#64748b;font-size:12px;"> · ${CHANNEL_LABEL[c.channel] || 'Chat'} · ${STAGE_LABEL[c.sales.stage]} · waiting ${Math.round((now - new Date(c.lastCustomerAt)) / HOUR)}h</span>
         ${c.sales.summary ? `<div style="color:#475569;font-size:13px;margin-top:2px;">${escapeHtml(c.sales.summary)}</div>` : ''}
         <div style="color:#64748b;font-size:12px;margin-top:2px;">Last message: "${escapeHtml(String(c.messages[0].content || '').slice(0, 140))}"</div>
       </td></tr>`).join('');
@@ -346,7 +348,7 @@ async function runSalesFollowUps() {
       lastCustomerAt: { $gte: new Date(now - WINDOW_MS), $lte: new Date(now - HOUR) },
       'sales.stage': { $in: HOT },
       ...notYetFollowedUp,
-    }).select({ companyId: 1, channel: 1, externalId: 1, contactId: 1, email: 1, phone: 1, displayName: 1, status: 1, sales: 1, lastCustomerAt: 1, messages: { $slice: -12 } })
+    }).select({ companyId: 1, channel: 1, externalId: 1, contactId: 1, email: 1, phone: 1, displayName: 1, status: 1, sales: 1, meta: 1, lastCustomerAt: 1, messages: { $slice: -12 } })
       .sort({ lastCustomerAt: 1 }).limit(FOLLOW_UPS_PER_RUN).lean();
     for (const c of due) {
       // eslint-disable-next-line no-await-in-loop

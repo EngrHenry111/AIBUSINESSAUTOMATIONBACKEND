@@ -29,6 +29,7 @@ const salesFollowUp = require('./salesFollowUp');
 const LEAD_SOURCE = {
   whatsapp: { source: 'whatsapp', activityType: 'whatsapp', label: 'WhatsApp' },
   widget: { source: 'chat_widget', activityType: 'chat', label: 'Website chat' },
+  telegram: { source: 'telegram', activityType: 'telegram', label: 'Telegram' },
 };
 
 const HANDOVER_KEYWORDS = [
@@ -124,7 +125,9 @@ async function receiveMessage({
   const body = String(text || '').trim();
   const typed = contactFromText(body);
   const mail = email || typed.email;
-  const tel = phone || (channel === 'widget' ? typed.phone : undefined);
+  // A number typed into the chat counts, except on WhatsApp (where the
+  // sender's own number is already known and a typed one may be someone else's).
+  const tel = phone || (channel !== 'whatsapp' ? typed.phone : undefined);
 
   let convo = await Conversation.findOne({ companyId, channel, externalId: String(externalId) }).sort({ lastMessageAt: -1 });
   if (!convo) {
@@ -139,7 +142,13 @@ async function receiveMessage({
     convo.displayName = String(name).slice(0, 120);
   }
   if (mail && !convo.email) convo.email = String(mail).toLowerCase().slice(0, 160);
-  if (tel && !convo.phone) convo.phone = String(tel).slice(0, 40);
+  if (phone && channel === 'telegram') {
+    // Shared with Telegram's own button: really this customer's number, so it
+    // replaces anything they typed and unlocks their order history for the AI.
+    convo.phone = String(phone).slice(0, 40);
+    convo.meta = { ...(convo.meta || {}), phoneVerified: true };
+    convo.markModified('meta');
+  } else if (tel && !convo.phone) convo.phone = String(tel).slice(0, 40);
   if (!convo.displayName) convo.displayName = convo.phone || null;
 
   const inbound = pushMessage(convo, { from: 'customer', content: body, read: false });
