@@ -178,6 +178,11 @@ async function bootstrap() {
     setInterval(runLeadFollowUps, 60 * 60 * 1000);
     logger.info('✅ Lead follow-up reminders scheduled (runs hourly)');
 
+    // ── Sales: AI pipeline stages, WhatsApp follow-ups, waiting-customer reminders ──
+    const { runSalesFollowUps } = require('./src/services/inbox/salesFollowUp');
+    setTimeout(runSalesFollowUps, 2 * 60 * 1000);
+    setInterval(runSalesFollowUps, 15 * 60 * 1000);
+
     // Socket.io: authenticated rooms (see utils/socketAuth.js)
     require('./src/utils/socketAuth').attachSocketHandlers(io);
 

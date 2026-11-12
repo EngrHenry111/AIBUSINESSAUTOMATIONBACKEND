@@ -27,6 +27,8 @@ const messageSchema = new mongoose.Schema({
   // false when the channel could not deliver a reply (e.g. WhatsApp offline).
   delivered: { type: Boolean, default: undefined },
   read: { type: Boolean, default: false },
+  // An automatic follow-up the AI sent after the customer went quiet.
+  followUp: { type: Boolean, default: undefined },
 }, { _id: true });
 
 const conversationSchema = new mongoose.Schema({
@@ -43,6 +45,22 @@ const conversationSchema = new mongoose.Schema({
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   messages: { type: [messageSchema], default: [] },
   lastMessageAt: { type: Date, default: Date.now },
+  // When the customer last wrote: WhatsApp allows free replies for 24h after it.
+  lastCustomerAt: { type: Date },
+
+  // Where this customer is in buying (services/inbox/salesFollowUp.js).
+  sales: {
+    stage: { type: String, enum: ['browsing', 'interested', 'ready_to_buy', 'ordered', 'not_interested', 'support'] },
+    products: { type: [String], default: undefined },
+    summary: { type: String },
+    analyzedAt: { type: Date },
+  },
+  followUp: {
+    sentAt: { type: Date },
+    forCustomerAt: { type: Date },   // the silence it answered (one nudge per silence)
+    count: { type: Number, default: 0 },
+    teamRemindedAt: { type: Date },
+  },
   handoverRequestedAt: { type: Date },
   resolvedAt: { type: Date },
 
@@ -58,6 +76,7 @@ const conversationSchema = new mongoose.Schema({
 conversationSchema.index({ companyId: 1, channel: 1, externalId: 1, lastMessageAt: -1 });
 conversationSchema.index({ companyId: 1, status: 1, lastMessageAt: -1 });
 conversationSchema.index({ companyId: 1, lastMessageAt: -1 });
+conversationSchema.index({ lastCustomerAt: 1, channel: 1, status: 1 });
 conversationSchema.index({ companyId: 1, contactId: 1, lastMessageAt: -1 });
 conversationSchema.index(
   { 'legacy.id': 1 },

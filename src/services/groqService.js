@@ -209,6 +209,73 @@ ${PLAIN_TEXT_RULE}`;
 }
 
 /**
+ * Reads a customer chat and says where they are in buying. Cheap model,
+ * JSON only. Never throws on a bad answer: returns null.
+ * @returns {Promise<{stage, products, summary, estimatedValue}|null>}
+ */
+const SALE_STAGES = ['browsing', 'interested', 'ready_to_buy', 'ordered', 'not_interested', 'support'];
+async function classifySale({ businessName, transcript }) {
+  const systemPrompt = `You read a chat between a customer and ${businessName || 'a business'} and judge how close the customer is to buying.
+Answer ONLY with JSON: {"stage": "...", "products": ["..."], "summary": "...", "estimatedValue": 0}
+stage, pick one:
+- browsing: general questions, no clear product interest yet
+- interested: asked about specific products, prices, sizes, stock or delivery
+- ready_to_buy: said they want to buy or order, asked how to pay, or asked for the link to order
+- ordered: says they have already ordered or paid
+- not_interested: declined, said no thanks, too expensive and stopped, or asked not to be contacted
+- support: only about an existing order, a complaint, a refund or a problem
+products: names of products they showed interest in, as written in the chat (max 5, may be empty).
+summary: one short sentence about what they want, for the sales team.
+estimatedValue: total price in naira of what they seem to want, from prices in the chat, else 0.`;
+  try {
+    const response = await complete({
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: transcript }],
+      model: MODELS.FAST, temperature: 0, maxTokens: 500,
+    });
+    const raw = String(response.choices[0].message.content || '').replace(/```json|```/g, '').trim();
+    const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+    if (!SALE_STAGES.includes(json.stage)) return null;
+    return {
+      stage: json.stage,
+      products: (Array.isArray(json.products) ? json.products : []).map((x) => cleanAIText(String(x)).slice(0, 80)).filter(Boolean).slice(0, 5),
+      summary: cleanAIText(String(json.summary || '')).slice(0, 300),
+      estimatedValue: Math.max(0, Math.round(Number(json.estimatedValue) || 0)),
+    };
+  } catch (err) {
+    logger.warn(`Sale classification failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * One short follow-up to a customer who went quiet. Returns SKIP_TOKEN
+ * when a follow-up would be wrong (they declined, complained, already bought).
+ */
+const SKIP_TOKEN = '[SKIP]';
+async function generateFollowUp({ businessName, catalog, customerName, interest, history = [] }) {
+  const systemPrompt = `You are the sales assistant for ${businessName || 'this business'} on WhatsApp. The customer chatted earlier and then stopped replying. Write ONE short, friendly follow-up message to them.
+Rules:
+- Refer to what they were interested in${interest ? ` (${interest})` : ''}, using the exact product name, current price and availability from the PRODUCT CATALOG. Include the product link if they might want to order.
+- If that product is now out of stock, say so kindly and suggest one similar in-stock product from the catalog, if any.
+- You may mention low stock only if the catalog says "Only N left". Never invent discounts, deadlines, delivery times or anything not in the catalog.
+- Helpful, not pushy. End with one simple question (for example whether they have any questions or would like help ordering).
+- 1 to 3 short sentences. Greet them by first name if you know it. Don't say you're an AI and don't mention this is an automatic message.
+- If a follow-up would be inappropriate (they declined, complained, asked for a refund, said they already ordered, or the chat was fully resolved), reply with exactly ${SKIP_TOKEN} and nothing else.
+${PLAIN_TEXT_RULE}`;
+  const sections = [];
+  if (customerName) sections.push(`CUSTOMER NAME: ${customerName}`);
+  if (catalog) sections.push(`PRODUCT CATALOG:\n${catalog}`);
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.slice(-10),
+    { role: 'user', content: `${sections.join('\n\n')}\n\n---\nWrite the follow-up message now.` },
+  ];
+  const response = await complete({ messages, model: MODELS.SMART, maxTokens: 400, temperature: 0.4 });
+  const text = cleanAIText(response.choices[0].message.content || '');
+  return !text || text.includes(SKIP_TOKEN) ? SKIP_TOKEN : text;
+}
+
+/**
  * Generic agent execution
  */
 async function runAgent(agentType, input, options = {}) {
@@ -269,4 +336,4 @@ async function generateStructured(prompt, schema, agentType = 'knowledge_assista
   }
 }
 
-module.exports = { complete, generateAnswer, generateWhatsAppReply, generateSalesReply, HANDOVER_TOKEN, runAgent, streamAnswer, generateStructured, MODELS };
+module.exports = { complete, generateAnswer, generateWhatsAppReply, generateSalesReply, HANDOVER_TOKEN, classifySale, generateFollowUp, SKIP_TOKEN, SALE_STAGES, runAgent, streamAnswer, generateStructured, MODELS };

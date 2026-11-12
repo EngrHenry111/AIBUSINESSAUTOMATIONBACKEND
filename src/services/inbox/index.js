@@ -23,6 +23,7 @@ const logger = require('../../utils/logger');
 const { attachContact, linkLead } = require('./contacts');
 const channels = require('./channels');
 const { catalogContext, customerContext } = require('./salesContext');
+const salesFollowUp = require('./salesFollowUp');
 
 // Lead source + timeline label for each channel.
 const LEAD_SOURCE = {
@@ -142,14 +143,18 @@ async function receiveMessage({
   if (!convo.displayName) convo.displayName = convo.phone || null;
 
   const inbound = pushMessage(convo, { from: 'customer', content: body, read: false });
+  convo.lastCustomerAt = inbound.timestamp;
   await convo.save();
 
   // Who is this? (contact + lead) — in the background of the reply path,
   // but awaited so the profile is ready when the team opens the chat.
   const contact = await attachContact(convo, { name, email: convo.email, phone: convo.phone }, { requireIdentity: channel === 'widget' });
   const ls = LEAD_SOURCE[channel];
+  // The stage check (salesFollowUp) waits for this, so a brand-new lead is
+  // there to be moved along.
+  let leadReady = null;
   if (ls && (convo.email || convo.phone)) {
-    captureLead(companyId, {
+    leadReady = captureLead(companyId, {
       source: ls.source,
       name: convo.displayName && convo.displayName !== convo.phone ? convo.displayName : undefined,
       email: convo.email,
@@ -165,6 +170,7 @@ async function receiveMessage({
   if (convo.status === 'human') {
     if (convo.assignedTo) emitUser(convo.assignedTo, 'inbox:new_message', { conversationId: convo._id, channel, message: inbound });
     else emit(companyId, 'inbox:handover_needed', handoverPayload(convo, body));
+    salesFollowUp.afterMessage(convo, leadReady);
     return { conversation: convo, reply: null, waitingForHuman: true };
   }
 
@@ -175,13 +181,16 @@ async function receiveMessage({
   if (!answer) {
     if (noAnswer.handover) {
       await handOver(convo, { notice: noAnswer.reply, lastMessage: body });
+      salesFollowUp.afterMessage(convo, leadReady);
       return { conversation: convo, reply: noAnswer.reply, waitingForHuman: true };
     }
     await sendFromAI(convo, noAnswer.reply);
+    salesFollowUp.afterMessage(convo, leadReady);
     return { conversation: convo, reply: noAnswer.reply, waitingForHuman: false };
   }
 
   await sendFromAI(convo, answer.reply, answer.sources);
+  salesFollowUp.afterMessage(convo, leadReady);
   return { conversation: convo, reply: answer.reply, waitingForHuman: false };
 }
 

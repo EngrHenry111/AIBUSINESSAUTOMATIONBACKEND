@@ -31,6 +31,8 @@ const leadSchema = new mongoose.Schema({
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdAt: { type: Date, default: Date.now },
   }],
+  // Products the customer asked about in chats (AI, services/inbox/salesFollowUp).
+  interestedIn: { type: [String], default: undefined },
   lastContactedAt: { type: Date },
   nextFollowUpAt: { type: Date },
   ai: {

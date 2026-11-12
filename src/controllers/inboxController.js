@@ -63,7 +63,7 @@ exports.getConversations = async (req, res, next) => {
     const cid = new mongoose.Types.ObjectId(String(req.companyId));
     const [convos, byStatus, byChannel, unclaimed] = await Promise.all([
       Conversation.find(q)
-        .select({ messages: { $slice: -40 }, channel: 1, displayName: 1, phone: 1, email: 1, status: 1, assignedTo: 1, contactId: 1, lastMessageAt: 1, handoverRequestedAt: 1, externalId: 1 })
+        .select({ messages: { $slice: -40 }, channel: 1, displayName: 1, phone: 1, email: 1, status: 1, assignedTo: 1, contactId: 1, lastMessageAt: 1, handoverRequestedAt: 1, externalId: 1, sales: 1, followUp: 1 })
         .populate('assignedTo', 'name')
         .sort({ lastMessageAt: -1 })
         .limit(200)
@@ -110,7 +110,7 @@ async function profileFor(convo) {
         .sort({ lastMessageAt: -1 }).limit(10).lean()
       : [],
     contact?.leadId
-      ? Lead.findOne({ _id: contact.leadId, companyId: convo.companyId }).select('name status value score source nextFollowUpAt ai.priority').lean()
+      ? Lead.findOne({ _id: contact.leadId, companyId: convo.companyId }).select('name status value score source nextFollowUpAt ai.priority interestedIn').lean()
       : null,
     contact?.customerId
       ? Customer.findOne({ _id: contact.customerId, companyId: convo.companyId }).select('name totalOrders totalSpent lastOrderAt tags').lean()

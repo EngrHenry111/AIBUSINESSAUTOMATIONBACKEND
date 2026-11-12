@@ -20,7 +20,7 @@ const LEAD_STATUSES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation
 const LEAD_EDITABLE_FIELDS = [
   'name', 'email', 'phone', 'company', 'position', 'source', 'status',
   'score', 'value', 'currency', 'assignedTo', 'tags', 'description',
-  'lastContactedAt', 'nextFollowUpAt',
+  'lastContactedAt', 'nextFollowUpAt', 'interestedIn',
 ];
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -47,17 +47,22 @@ exports.getLeads = async (req, res, next) => {
       { company: { $regex: escapeRegex(search), $options: 'i' } },
     ];
 
-    const skip = (page - 1) * limit;
+    // The pipeline board wants every lead at once, without the timelines.
+    const board = req.query.view === 'board';
+    const cap = Math.min(board ? 500 : 200, Math.max(1, Number(limit) || 20));
+    const skip = (Math.max(1, Number(page) || 1) - 1) * cap;
+    const query = Lead.find(filter)
+      .populate('assignedTo', 'name avatar')
+      .sort(board ? { updatedAt: -1 } : { createdAt: -1 }).skip(skip).limit(cap);
+    if (board) query.select('-activities -notes -ai.followUpDraft');
     const [leads, total] = await Promise.all([
-      Lead.find(filter)
-        .populate('assignedTo', 'name avatar')
-        .sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+      query,
       Lead.countDocuments(filter),
     ]);
 
     res.status(200).json({
       success: true, data: leads,
-      pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
+      pagination: { total, page: Math.max(1, Number(page) || 1), limit: cap, pages: Math.ceil(total / cap) },
     });
   } catch (err) { next(err); }
 };
@@ -114,8 +119,11 @@ exports.updateLead = async (req, res, next) => {
 
 // ── GET/PUT /leads/capture-settings ────────────────────────────────────
 // Which channels add leads by themselves, and AI scoring on arrival.
-const CAPTURE_KEYS = ['chat', 'whatsapp', 'store', 'card', 'aiScoring'];
-const captureSettingsOf = (company) => Object.fromEntries(CAPTURE_KEYS.map((k) => [k, company?.leadCapture?.[k] !== false]));
+const CAPTURE_KEYS = ['chat', 'whatsapp', 'store', 'card', 'aiScoring', 'aiStages', 'followUps', 'teamReminders'];
+const captureSettingsOf = (company) => ({
+  ...Object.fromEntries(CAPTURE_KEYS.map((k) => [k, company?.leadCapture?.[k] !== false])),
+  followUpAfterHours: Number(company?.leadCapture?.followUpAfterHours) || 3,
+});
 
 exports.getCaptureSettings = async (req, res, next) => {
   try {
@@ -128,6 +136,11 @@ exports.updateCaptureSettings = async (req, res, next) => {
   try {
     const $set = {};
     for (const k of CAPTURE_KEYS) if (typeof req.body[k] === 'boolean') $set[`leadCapture.${k}`] = req.body[k];
+    if (req.body.followUpAfterHours !== undefined) {
+      const h = Number(req.body.followUpAfterHours);
+      if (!Number.isInteger(h) || h < 1 || h > 20) return next(new AppError('Follow-up delay must be between 1 and 20 hours.', 400));
+      $set['leadCapture.followUpAfterHours'] = h;
+    }
     const company = await Company.findByIdAndUpdate(req.companyId, { $set }, { new: true }).select('leadCapture').lean();
     await writeAuditLog({ companyId: req.companyId, userId: req.user._id, action: 'lead.capture_settings', resource: 'Company', resourceId: req.companyId, description: JSON.stringify($set), ip: req.ip });
     res.status(200).json({ success: true, data: captureSettingsOf(company) });

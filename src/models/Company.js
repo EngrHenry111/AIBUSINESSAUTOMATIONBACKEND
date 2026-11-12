@@ -220,6 +220,11 @@ const companySchema = new mongoose.Schema({
     store: { type: Boolean, default: true },
     card: { type: Boolean, default: true },
     aiScoring: { type: Boolean, default: true },
+    // Sales follow-up (services/inbox/salesFollowUp.js)
+    aiStages: { type: Boolean, default: true },       // AI moves leads along the pipeline from chats
+    followUps: { type: Boolean, default: true },      // AI nudges interested WhatsApp customers who went quiet
+    followUpAfterHours: { type: Number, default: 3, min: 1, max: 20 },
+    teamReminders: { type: Boolean, default: true },  // email the team about hot customers left waiting
   },
   widgetSettings: {
     widgetEnabled: { type: Boolean, default: true },
