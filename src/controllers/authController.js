@@ -248,7 +248,8 @@ exports.verifyEmail = async (req, res, next) => {
     const hash = crypto.createHash('sha256').update(token).digest('hex');
     const user = await User.findOne({ emailVerifyToken: hash }).select('+emailVerifyToken +emailVerifyExpires');
 
-    if (!user) return next(new AppError('This verification link is invalid or has already been used.', 400));
+    // Each "Resend" replaces the previous link, so an older email stops working.
+    if (!user) return next(new AppError('This link has already been used, or a newer one was sent. If you asked for more than one email, open the newest one — or log in: you may already be verified.', 400));
     if (user.emailVerifyExpires && user.emailVerifyExpires.getTime() < Date.now()) {
       return next(new AppError('This verification link has expired. Please request a new one.', 400));
     }
